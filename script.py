@@ -37,7 +37,7 @@ def login(sb, email, password):
 
     print("🛡 处理 Turnstile...")
     # 用 uc_click 点击 Turnstile iframe
-    sb.uc_click('iframe[src*="turnstile"]', timeout=10)
+    sb.uc_click('iframe[src*="turnstile"]', timeout=60)
     print("✅ Turnstile 验证已处理")
 
     print("🔑 点击登录按钮...")
