@@ -36,8 +36,8 @@ def login(sb, email, password):
     time.sleep(1)
 
     print("🛡 处理 Turnstile...")
-    # 用 uc_click 点击 Turnstile iframe
-    sb.uc_click('iframe[src*="turnstile"]', timeout=60)
+    # ✅ 唯一改动：使用有头模式下的 GUI 验证，增加超时
+    sb.uc_gui_click_captcha(timeout=60)
     print("✅ Turnstile 验证已处理")
 
     print("🔑 点击登录按钮...")
