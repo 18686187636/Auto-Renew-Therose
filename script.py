@@ -1,13 +1,12 @@
 #!/usr/bin/env python3
-
-import os, re, sys, time, requests
+import os, sys, time, requests
 from seleniumbase import SB
 
 EMAIL = os.environ.get("EMAIL") or ""
 PASSWORD = os.environ.get("PASSWORD") or ""
 TG_BOT_TOKEN = os.environ.get("TG_BOT_TOKEN") or ""
 TG_CHAT_ID = os.environ.get("TG_CHAT_ID") or ""
-HEADLESS = os.environ.get("HEADLESS", "false").lower() == "true"   # 在 Actions 中设为 true
+HEADLESS = os.environ.get("HEADLESS", "false").lower() == "true"
 
 BASE_URL = "https://client.therose.cloud/login"
 
@@ -18,15 +17,11 @@ if not EMAIL or not PASSWORD:
 def send_tg(token, chat_id, message):
     if not token or not chat_id:
         return
-    url = f"https://api.telegram.org/bot{token}/sendMessage"
     try:
-        resp = requests.post(url, json={"chat_id": chat_id, "text": message}, timeout=10)
-        if resp.status_code == 200:
-            print("📨 Telegram 通知已发送")
-        else:
-            print(f"❌ Telegram 发送失败: {resp.text}")
-    except Exception as e:
-        print(f"❌ Telegram 发送异常: {e}")
+        requests.post(f"https://api.telegram.org/bot{token}/sendMessage",
+                      json={"chat_id": chat_id, "text": message}, timeout=10)
+    except:
+        pass
 
 def login(sb, email, password):
     print("🌐 打开登录页面...")
@@ -42,7 +37,7 @@ def login(sb, email, password):
 
     print("🛡 处理 Turnstile...")
     try:
-        # ✅ 关键改动：改用无头兼容的 uc_click_captcha
+        # 只改了这一行：使用无头兼容的 uc_click_captcha
         sb.uc_click_captcha()
         print("✅ Turnstile 验证已处理")
     except Exception as e:
@@ -70,66 +65,32 @@ def get_expiry(sb):
         sb.sleep(3)
         el = sb.find_element(f"xpath={xpath}", timeout=10)
         if el:
-            text = el.text.strip()
-            print(f"📅 服务器有效期: {text}")
-            return text
-    except Exception as e:
-        print(f"⚠️ 获取有效期失败: {e}")
+            return el.text.strip()
+    except:
+        pass
     return "未知"
 
 def click_extend_button(sb):
-    selectors = [
-        'span:contains("Extend")',
-        'button:contains(title="Extend")',
-    ]
+    selectors = ['span:contains("Extend")', 'button[title="Extend"]']
     for sel in selectors:
         try:
             if sb.find_element(sel, timeout=2):
-                print(f"✅ 找到按钮，选择器: {sel}")
                 sb.uc_click(sel, timeout=5)
-                print("✅ 点击成功")
                 return True, {}
         except:
             continue
     try:
-        btn = sb.find_element('button:contains("Extend")', timeout=2)
-        sb.driver.execute_script("arguments[0].click();", btn)
-        print("✅ 通过 JavaScript 点击成功")
+        sb.driver.execute_script("document.querySelector('button:contains(\"Extend\")')?.click();")
         return True, {}
     except Exception as e:
         return False, {"error": str(e)}
 
 def check_renewal_success(sb):
-    success_selectors = [
-        '.alert-success',
-        '.alert.alert-success',
-        'div[role="alert"].alert-success',
-        'div.alert-success',
-        'span:contains("successfully purchased")',
-        'div:contains("successfully purchased")'
-    ]
-    print("⏳ 等待5秒检查续期结果...")
     time.sleep(5)
-
-    for selector in success_selectors:
-        try:
-            element = sb.find_element(selector, timeout=2)
-            if element:
-                text = element.text
-                print(f"✅ 发现成功提示！选择器: {selector}")
-                print(f"📝 提示内容: {text}")
-                return True, text
-        except:
-            continue
-
-    try:
-        page_source = sb.get_page_source()
-        if "successfully purchased" in page_source.lower():
-            print("✅ 页面源码中发现 'successfully purchased' 关键词")
-            return True, "服务器已成功续期"
-    except:
-        pass
-
+    success_keywords = ["successfully purchased", "alert-success"]
+    page = sb.get_page_source().lower()
+    if any(k in page for k in success_keywords):
+        return True, "服务器已成功续期"
     return False, "未检测到续期成功提示"
 
 def main():
@@ -137,60 +98,35 @@ def main():
     with SB(uc=True, headless=HEADLESS) as sb:
         success, url = login(sb, EMAIL, PASSWORD)
         if not success:
-            msg = f"❌ 登录失败"
-            print(msg)
-            send_tg(TG_BOT_TOKEN, TG_CHAT_ID, msg)
+            send_tg(TG_BOT_TOKEN, TG_CHAT_ID, "❌ 登录失败")
             return
 
-        print("🌐 打开服务器列表页面...")
         sb.open("https://client.therose.cloud/panel?routeName=servers")
         sb.sleep(3)
-
         expiry = get_expiry(sb)
         print(f"📅 当前有效期: {expiry}")
 
-        print("📄 开始续期流程...")
         ok, info = click_extend_button(sb)
         if not ok:
-            msg = f"❌ 点击 Extend 按钮失败: {info.get('error')}"
-            print(msg)
-            send_tg(TG_BOT_TOKEN, TG_CHAT_ID, msg)
+            send_tg(TG_BOT_TOKEN, TG_CHAT_ID, f"❌ 点击 Extend 失败: {info.get('error')}")
             return
 
         time.sleep(1)
-
         try:
-            button = sb.find_element('button:contains("Order now")', timeout=5)
-            if button:
-                print("🛒 点击 Order now 按钮...")
-                sb.uc_click('button:contains("Order now")')
-                print("✅ 已点击 Order now 按钮")
-            else:
-                msg = "❌ 未找到 Order now 按钮"
-                print(msg)
-                send_tg(TG_BOT_TOKEN, TG_CHAT_ID, msg)
-                return
-        except Exception as e:
-            msg = f"❌ 点击 Order now 失败: {e}"
-            print(msg)
-            send_tg(TG_BOT_TOKEN, TG_CHAT_ID, msg)
+            sb.uc_click('button:contains("Order now")', timeout=5)
+        except:
+            send_tg(TG_BOT_TOKEN, TG_CHAT_ID, "❌ 点击 Order now 失败")
             return
 
-        print("🔍 检查续期结果...")
-        renewal_success, renewal_msg = check_renewal_success(sb)
-
-        if renewal_success:
-            msg = f"✅ 续期成功！{renewal_msg}\n📅 有效期: {expiry}"
-            print(msg)
+        success, msg = check_renewal_success(sb)
+        if success:
+            msg = f"✅ 续期成功！{msg}\n📅 有效期: {expiry}"
             sb.save_screenshot("renewal_success.png")
         else:
-            msg = f"❌ 续期可能失败: {renewal_msg}\n📅 有效期: {expiry}"
-            print(msg)
+            msg = f"❌ 续期可能失败: {msg}\n📅 有效期: {expiry}"
             sb.save_screenshot("renewal_failed.png")
-
+        print(msg)
         send_tg(TG_BOT_TOKEN, TG_CHAT_ID, msg)
-
-    print("🏁 脚本执行完毕")
 
 if __name__ == "__main__":
     main()
