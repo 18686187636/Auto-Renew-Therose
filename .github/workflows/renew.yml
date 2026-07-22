@@ -14,10 +14,10 @@ jobs:
       - name: Install dependencies
         run: |
           pip install --upgrade seleniumbase requests
-      - name: Install Chrome & Xvfb
+      - name: Install Chrome
         run: |
           sudo apt-get update
-          sudo apt-get install -y wget gnupg xvfb
+          sudo apt-get install -y wget gnupg
           wget -q -O - https://dl-ssl.google.com/linux/linux_signing_key.pub | sudo apt-key add -
           sudo sh -c 'echo "deb [arch=amd64] http://dl.google.com/linux/chrome/deb/ stable main" >> /etc/apt/sources.list.d/google.list'
           sudo apt-get update
@@ -28,7 +28,7 @@ jobs:
           PASSWORD: ${{ secrets.PASSWORD }}
           TG_BOT_TOKEN: ${{ secrets.TG_BOT_TOKEN }}
           TG_CHAT_ID: ${{ secrets.TG_CHAT_ID }}
-          HEADLESS: "true"   # 使用无头模式（uc_click_captcha）
+          HEADLESS: "true"
         run: |
           python script.py
       - name: Upload screenshots
