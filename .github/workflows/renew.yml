@@ -2,9 +2,8 @@ name: Renew The Rose Cloud
 
 on:
   workflow_dispatch:
-  # 可选： schedule 定期运行
   # schedule:
-  #   - cron: '0 0 * * *'
+  #   - cron: '0 0 * * *'   # 如需定时，取消注释
 
 jobs:
   renew:
@@ -30,7 +29,7 @@ jobs:
           seleniumbase install chromedriver
 
       - name: 🔗 配置代理（sing-box）
-        if: secrets.NODE_LINK != ''
+        if: env.NODE_LINK != ''
         env:
           NODE_LINK: ${{ secrets.NODE_LINK }}
         run: |
@@ -166,7 +165,6 @@ jobs:
           TG_CHAT_ID: ${{ secrets.TG_CHAT_ID }}
           PROXY_SERVER: ${{ secrets.NODE_LINK != '' && 'socks5://127.0.0.1:1080' || '' }}
         run: |
-          # 如果代理已启动，则使用 SOCKS5 代理；否则 PROXY_SERVER 为空
           if [ -n "$PROXY_SERVER" ]; then
             echo "🔗 已启用代理: $PROXY_SERVER"
           else
