@@ -15,7 +15,10 @@ jobs:
 
       - name: Install dependencies
         run: |
+          # 强制安装最新版 SeleniumBase（包含 uc_click_captcha）
           pip install --upgrade seleniumbase requests
+          # 打印版本供排查
+          python -c "import seleniumbase; print('SeleniumBase version:', seleniumbase.__version__)"
 
       - name: Install Chrome
         run: |
@@ -32,7 +35,7 @@ jobs:
           PASSWORD: ${{ secrets.PASSWORD }}
           TG_BOT_TOKEN: ${{ secrets.TG_BOT_TOKEN }}
           TG_CHAT_ID: ${{ secrets.TG_CHAT_ID }}
-          HEADLESS: "true"   # 启用无头模式
+          HEADLESS: "true"
         run: |
           python script.py
 
