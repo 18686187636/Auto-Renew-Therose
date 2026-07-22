@@ -7,7 +7,7 @@ EMAIL = os.environ.get("EMAIL") or ""
 PASSWORD = os.environ.get("PASSWORD") or ""
 TG_BOT_TOKEN = os.environ.get("TG_BOT_TOKEN") or ""
 TG_CHAT_ID = os.environ.get("TG_CHAT_ID") or ""
-HEADLESS = os.environ.get("HEADLESS", "false").lower() == "true"   # 在 Actions 中设为 false
+HEADLESS = os.environ.get("HEADLESS", "false").lower() == "true"   # 在 Actions 中设为 true
 
 BASE_URL = "https://client.therose.cloud/login"
 
@@ -42,10 +42,11 @@ def login(sb, email, password):
 
     print("🛡 处理 Turnstile...")
     try:
-        sb.uc_gui_click_captcha()
+        # ✅ 关键改动：改用无头兼容的 uc_click_captcha
+        sb.uc_click_captcha()
         print("✅ Turnstile 验证已处理")
     except Exception as e:
-        print(f"⚠️ uc_gui_click_captcha 执行异常: {e}")
+        print(f"⚠️ uc_click_captcha 执行异常: {e}")
 
     print("🔑 点击登录按钮...")
     sb.uc_click('button:contains("Sign in")')
