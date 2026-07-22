@@ -37,7 +37,7 @@ def login(sb, email, password):
 
     print("🛡 处理 Turnstile...")
     # 唯一改动：使用 driver 上的 uc_click_captcha
-    sb.driver.uc_click_captcha()   # 尝试通过 driver 调用
+    sb.driver.uc_click_captcha()
     print("✅ Turnstile 验证已处理")
 
     print("🔑 点击登录按钮...")
