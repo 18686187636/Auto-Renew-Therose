@@ -2,6 +2,7 @@
 import os, time, requests, sys
 from seleniumbase import SB
 
+# ===== 环境变量 =====
 EMAIL = os.environ.get("EMAIL") or ""
 PASSWORD = os.environ.get("PASSWORD") or ""
 TG_BOT_TOKEN = os.environ.get("TG_BOT_TOKEN") or ""
@@ -25,7 +26,7 @@ def login(sb):
     print("🌐 打开登录页面...")
     sb.open("https://client.therose.cloud/login")
     sb.wait_for_ready_state_complete()
-    sb.sleep(1)
+    sb.sleep(2)  # 等待页面完全加载
 
     print("📧 填写邮箱...")
     sb.type('#login_form_email', EMAIL, timeout=10)
@@ -35,20 +36,21 @@ def login(sb):
 
     print("🛡 处理 Turnstile...")
     try:
-        # 升级 SeleniumBase 后可用 uc_click_captcha
         if HEADLESS:
+            # 无头模式：使用自动点击
             sb.uc_click_captcha()
         else:
+            # 有头模式：弹出 GUI 验证窗口
             sb.uc_gui_click_captcha()
         print("✅ Turnstile 验证已处理")
     except Exception as e:
         print(f"⚠️ 验证码处理异常: {e}")
-        # 尝试备用方法
+        # 尝试备用方法：直接点击 iframe
         try:
-            sb.uc_click("iframe[src*='turnstile']", timeout=5)
+            sb.uc_click('iframe[src*="turnstile"]', timeout=5)
             print("✅ 通过点击 iframe 尝试处理")
         except:
-            pass
+            print("❌ 所有验证码处理方法均失败")
 
     # 登录前截图（用于调试）
     sb.save_screenshot("before_login.png")
@@ -67,7 +69,7 @@ def login(sb):
 
     print(f"❌ 登录失败，当前 URL: {current_url}")
     sb.save_screenshot("login_failed.png")
-    # 打印页面源码片段
+    # 打印页面源码片段帮助排查
     print("📄 页面源码片段（前500字符）：")
     print(sb.get_page_source()[:500])
     return False
