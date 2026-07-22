@@ -8,6 +8,7 @@ EMAIL = os.environ.get("EMAIL") or ""
 PASSWORD = os.environ.get("PASSWORD") or ""
 TG_BOT_TOKEN = os.environ.get("TG_BOT_TOKEN") or ""
 TG_CHAT_ID = os.environ.get("TG_CHAT_ID") or ""
+PROXY_SERVER = os.environ.get("PROXY_SERVER") or ""   # 例如 socks5://127.0.0.1:1080
 
 BASE_URL = "https://client.therose.cloud/login"
 
@@ -18,7 +19,7 @@ if not EMAIL or not PASSWORD:
 
 # 辅助：保存带步骤名的截图
 def screenshot_step(sb, step_name):
-    timestamp = int(time.time() * 1000)  # 毫秒时间戳
+    timestamp = int(time.time() * 1000)
     filename = f"step_{step_name}_{timestamp}.png"
     sb.save_screenshot(filename)
     print(f"📸 截图已保存: {filename}")
@@ -48,7 +49,6 @@ def click_extend_button(sb):
 
 # 检查续期是否成功
 def check_renewal_success(sb):
-    """检查是否出现续期成功的提示"""
     success_selectors = [
         '.alert-success',
         '.alert.alert-success',
@@ -57,10 +57,8 @@ def check_renewal_success(sb):
         'span:contains("successfully purchased")',
         'div:contains("successfully purchased")'
     ]
-    
     print("⏳ 等待5秒检查续期结果...")
     time.sleep(5)
-    
     for selector in success_selectors:
         try:
             element = sb.find_element(selector, timeout=2)
@@ -71,8 +69,6 @@ def check_renewal_success(sb):
                 return True, text
         except:
             continue
-    
-    # 如果没有找到特定选择器，检查页面源码是否包含成功关键词
     try:
         page_source = sb.get_page_source()
         if "successfully purchased" in page_source.lower():
@@ -80,7 +76,6 @@ def check_renewal_success(sb):
             return True, "服务器已成功续期"
     except:
         pass
-    
     return False, "未检测到续期成功提示"
 
 # 发送tg通知
@@ -99,7 +94,6 @@ def send_tg(token, chat_id, message):
 
 # 获取服务器有效期
 def get_expiry(sb):
-    """获取服务器有效期"""
     xpath = '/html/body/div[1]/section/div/div[1]/div[2]/div/div/div/div[2]/div[2]/div[2]/div/span'
     try:
         sb.open("https://client.therose.cloud/panel?routeName=servers")
@@ -142,7 +136,6 @@ def login(sb, email, password):
     screenshot_step(sb, "5_login_clicked")
 
     sb.sleep(3)
-    # 等待跳转
     for i in range(30):
         current_url = sb.get_current_url()
         page_title = sb.get_title() or ""
@@ -155,14 +148,18 @@ def login(sb, email, password):
 
     print(f"❌ 登录失败，当前 URL: {sb.get_current_url()}")
     screenshot_step(sb, "6_login_failed")
-    sb.save_screenshot("login_failed.png")   # 额外保留
+    sb.save_screenshot("login_failed.png")
     return False, sb.get_current_url()
 
 # 主流程
 def main():
     print("🚀 启动浏览器")
+    if PROXY_SERVER:
+        print(f"🔗 使用代理: {PROXY_SERVER}")
+    else:
+        print("🍭 未使用代理，直连访问")
 
-    with SB(uc=True, headless=False) as sb:
+    with SB(uc=True, headless=False, proxy=PROXY_SERVER or None) as sb:
         success, url = login(sb, EMAIL, PASSWORD)
 
         if not success:
@@ -177,24 +174,20 @@ def main():
         sb.sleep(3)
         screenshot_step(sb, "7_server_list")
 
-        # 获取有效期
         expiry = get_expiry(sb)
         print(f"📅 当前有效期: {expiry}")
 
         print("📄 开始续期流程...")
-        
-        # 点击 Extend 按钮
         ok, info = click_extend_button(sb)
         if not ok:
             msg = f"❌ 点击 Extend 按钮失败: {info.get('error')}"
             print(msg)
             send_tg(TG_BOT_TOKEN, TG_CHAT_ID, msg)
             return
-        
+
         time.sleep(1)
         screenshot_step(sb, "8_extend_clicked")
-        
-        # 点击 Order now 按钮
+
         try:
             button = sb.find_element('button:contains("Order now")', timeout=5)
             if button:
@@ -212,12 +205,11 @@ def main():
             print(msg)
             send_tg(TG_BOT_TOKEN, TG_CHAT_ID, msg)
             return
-        
-        # 检查续期是否成功
+
         print("🔍 检查续期结果...")
         renewal_success, renewal_msg = check_renewal_success(sb)
         screenshot_step(sb, "10_renewal_result")
-        
+
         if renewal_success:
             msg = f"✅ 续期成功！{renewal_msg}\n📅 有效期: {expiry}"
             print(msg)
@@ -226,7 +218,7 @@ def main():
             msg = f"❌ 续期可能失败: {renewal_msg}\n📅 有效期: {expiry}"
             print(msg)
             sb.save_screenshot("renewal_failed.png")
-        
+
         send_tg(TG_BOT_TOKEN, TG_CHAT_ID, msg)
 
     print("🏁 脚本执行完毕")
