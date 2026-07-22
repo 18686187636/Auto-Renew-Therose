@@ -16,6 +16,13 @@ if not EMAIL or not PASSWORD:
     print("❌ 请设置环境变量 EMAIL 和 PASSWORD")
     sys.exit(1)
 
+# 辅助：保存带步骤名的截图
+def screenshot_step(sb, step_name):
+    timestamp = int(time.time() * 1000)  # 毫秒时间戳
+    filename = f"step_{step_name}_{timestamp}.png"
+    sb.save_screenshot(filename)
+    print(f"📸 截图已保存: {filename}")
+
 # 点击续期按钮
 def click_extend_button(sb):
     selectors = [
@@ -106,17 +113,21 @@ def get_expiry(sb):
         print(f"⚠️ 获取有效期失败: {e}")
     return "未知"
 
-# 登录流程
+# 登录流程（每步截图）
 def login(sb, email, password):
     print("🌐 打开登录页面...")
-    print("⏳ 等待页面加载...")
     sb.open(BASE_URL)
     sb.wait_for_ready_state_complete()
-    sb.sleep(1)
+    screenshot_step(sb, "1_page_loaded")
+
     print("📧 填写邮箱...")
     sb.type('#login_form_email', email, timeout=10)
+    screenshot_step(sb, "2_email_filled")
+
     print("🔑 填写密码...")
     sb.type('#login_form_password', password, timeout=10)
+    screenshot_step(sb, "3_password_filled")
+
     time.sleep(1)
     print("🛡 处理 Turnstile...")
     try:
@@ -124,20 +135,27 @@ def login(sb, email, password):
         print("✅ Turnstile 验证已处理")
     except Exception as e:
         print(f"⚠️ uc_gui_click_captcha 执行异常: {e}")
+    screenshot_step(sb, "4_captcha_handled")
+
     print("🔑 点击登录按钮...")
     sb.uc_click('button:contains("Sign in")')
+    screenshot_step(sb, "5_login_clicked")
+
     sb.sleep(3)
-    for _ in range(30):
+    # 等待跳转
+    for i in range(30):
         current_url = sb.get_current_url()
         page_title = sb.get_title() or ""
         print(f"📄 当前 URL: {current_url} | Title: {page_title}")
         if "panel" in current_url:
             print("✅ 登录成功，已跳转到 Dashboard")
+            screenshot_step(sb, "6_login_success")
             return True, current_url
         time.sleep(1)
 
     print(f"❌ 登录失败，当前 URL: {sb.get_current_url()}")
-    sb.save_screenshot("login_failed.png")   # 修正拼写
+    screenshot_step(sb, "6_login_failed")
+    sb.save_screenshot("login_failed.png")   # 额外保留
     return False, sb.get_current_url()
 
 # 主流程
@@ -157,6 +175,7 @@ def main():
         print("🌐 打开服务器列表页面...")
         sb.open("https://client.therose.cloud/panel?routeName=servers")
         sb.sleep(3)
+        screenshot_step(sb, "7_server_list")
 
         # 获取有效期
         expiry = get_expiry(sb)
@@ -173,6 +192,7 @@ def main():
             return
         
         time.sleep(1)
+        screenshot_step(sb, "8_extend_clicked")
         
         # 点击 Order now 按钮
         try:
@@ -181,6 +201,7 @@ def main():
                 print("🛒 点击 Order now 按钮...")
                 sb.uc_click('button:contains("Order now")')
                 print("✅ 已点击 Order now 按钮")
+                screenshot_step(sb, "9_ordernow_clicked")
             else:
                 msg = "❌ 未找到 Order now 按钮"
                 print(msg)
@@ -195,6 +216,7 @@ def main():
         # 检查续期是否成功
         print("🔍 检查续期结果...")
         renewal_success, renewal_msg = check_renewal_success(sb)
+        screenshot_step(sb, "10_renewal_result")
         
         if renewal_success:
             msg = f"✅ 续期成功！{renewal_msg}\n📅 有效期: {expiry}"
