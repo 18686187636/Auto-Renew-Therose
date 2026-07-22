@@ -13,17 +13,17 @@ jobs:
         with:
           python-version: '3.10'
 
-      - name: Install latest SeleniumBase (from GitHub master)
+      - name: Install latest SeleniumBase
         run: |
           pip uninstall -y seleniumbase || true
           pip install --no-cache-dir --force-reinstall git+https://github.com/seleniumbase/SeleniumBase.git@master
           pip install requests
-          python -c "import seleniumbase; print('✅ SeleniumBase version:', seleniumbase.__version__)"
+          python -c "import seleniumbase; print('SeleniumBase version:', seleniumbase.__version__)"
           python -c "
 from seleniumbase import SB
 with SB(uc=True, headless=True) as sb:
-    print('✅ uc_click_captcha exists on driver:', hasattr(sb.driver, 'uc_click_captcha'))
-    print('✅ uc_click_captcha exists on sb:', hasattr(sb, 'uc_click_captcha'))
+    print('uc_click_captcha on driver:', hasattr(sb.driver, 'uc_click_captcha'))
+    print('uc_click_captcha on sb:', hasattr(sb, 'uc_click_captcha'))
 "
 
       - name: Install Chrome
@@ -35,7 +35,7 @@ with SB(uc=True, headless=True) as sb:
           sudo apt-get update
           sudo apt-get install -y google-chrome-stable
 
-      - name: Run renewal (headless)
+      - name: Run renewal script
         env:
           EMAIL: ${{ secrets.EMAIL }}
           PASSWORD: ${{ secrets.PASSWORD }}
