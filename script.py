@@ -122,7 +122,11 @@ def login(sb, email, password):
     sb.type('#login_form_password', password, timeout=10)
     screenshot_step(sb, "3_password_filled")
 
-    time.sleep(1)
+    # ✅ 新增：等待60秒，让 Turnstile 完全加载
+    print("⏳ 等待60秒，确保 Turnstile 验证码加载完成...")
+    time.sleep(60)
+    screenshot_step(sb, "3_after_wait")
+
     print("🛡 处理 Turnstile...")
     try:
         sb.uc_gui_click_captcha()
