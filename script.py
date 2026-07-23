@@ -109,9 +109,12 @@ def get_expiry(sb):
 
 # ========== 登录流程（含等待、重试、截图） ==========
 def login(sb, email, password):
-    # 设置超时
-    sb.set_page_load_timeout(60)
-    sb.set_script_timeout(60)
+    # 设置超时（通过 driver 对象）
+    try:
+        sb.driver.set_page_load_timeout(60)
+        sb.driver.set_script_timeout(60)
+    except Exception as e:
+        print(f"⚠️ 设置超时失败: {e}")
 
     for attempt in range(2):  # 最多重试2次
         if attempt > 0:
