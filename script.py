@@ -10,7 +10,7 @@ EMAIL = os.environ.get("EMAIL") or ""
 PASSWORD = os.environ.get("PASSWORD") or ""
 TG_BOT_TOKEN = os.environ.get("TG_BOT_TOKEN") or ""
 TG_CHAT_ID = os.environ.get("TG_CHAT_ID") or ""
-PROXY_SERVER = os.environ.get("PROXY_SERVER") or ""   # socks5://127.0.0.1:1080
+PROXY_SERVER = os.environ.get("PROXY_SERVER") or ""
 
 # 调度相关环境变量（可选）
 CRONJOB_API_KEY = os.environ.get("CRONJOB_API_KEY") or ""
@@ -58,7 +58,6 @@ def get_current_ip(proxy_server=None):
         return f"获取失败: {e}"
 
 def get_beijing_time():
-    # 仅用于通知头部显示当前北京时间，不影响调度
     return (datetime.utcnow() + timedelta(hours=8)).strftime("%Y-%m-%d %H:%M:%S")
 
 # ========== 续期按钮点击 ==========
@@ -115,21 +114,22 @@ def check_renewal_success(sb):
         pass
     return False, "未检测到续期成功提示"
 
-# ========== 获取服务器开始时间和到期时间（UTC） ==========
+# ========== 获取服务器到期时间（直接提取，不加偏移） ==========
 def get_server_time_info(sb):
+    """
+    从服务器列表页面提取时间（实际为到期时间），直接返回该时间字符串（UTC）。
+    """
     try:
         el = sb.find_element('span.fw-bold.text-muted', timeout=10)
         if el:
-            start_time_str = el.text.strip()
-            print(f"📅 服务器开始时间 (UTC): {start_time_str}")
-            start_time = datetime.strptime(start_time_str, "%Y-%m-%d %H:%M")
-            expiry_time = start_time + timedelta(hours=6)
-            expiry_time_str = expiry_time.strftime("%Y-%m-%d %H:%M")
-            print(f"⏰ 服务器到期时间 (UTC): {expiry_time_str}")
-            return start_time_str, expiry_time_str
+            time_str = el.text.strip()
+            print(f"📅 服务器到期时间 (UTC): {time_str}")
+            # 验证格式
+            datetime.strptime(time_str, "%Y-%m-%d %H:%M")
+            return time_str
     except Exception as e:
         print(f"⚠️ 获取服务器时间信息失败: {e}")
-    return None, None
+    return None
 
 # ========== 单次登录尝试 ==========
 def perform_login_attempt(sb, email, password, attempt_number):
@@ -205,7 +205,7 @@ def login(sb, email, password):
             return True, url
     return False, sb.get_current_url()
 
-# ========== 调度函数：通过 cron-job.org API 创建一次性任务 ==========
+# ========== 调度函数 ==========
 def schedule_via_cronjob(trigger_timestamp, gh_token, repo, workflow_id, api_key, branch="main"):
     dt = datetime.fromtimestamp(trigger_timestamp)
     schedule = {
@@ -288,15 +288,18 @@ def main():
         sb.sleep(3)
         screenshot_step(sb, "server_list")
 
-        # ---------- 获取时间信息（UTC）并直接用于通知 ----------
-        start_time_utc_str, expiry_time_utc_str = get_server_time_info(sb)
-
-        if start_time_utc_str and expiry_time_utc_str:
-            time_info = f"\n📅 开始 (UTC): {start_time_utc_str}\n⏰ 到期 (UTC): {expiry_time_utc_str}"
-            print(f"📅 开始 (UTC): {start_time_utc_str}")
-            print(f"⏰ 到期 (UTC): {expiry_time_utc_str}")
+        # ---------- 获取到期时间（UTC） ----------
+        expiry_time_utc_str = get_server_time_info(sb)
+        if expiry_time_utc_str:
+            # 转换为北京时间用于通知
+            expiry_dt = datetime.strptime(expiry_time_utc_str, "%Y-%m-%d %H:%M")
+            expiry_beijing = expiry_dt + timedelta(hours=8)
+            expiry_beijing_str = expiry_beijing.strftime("%Y-%m-%d %H:%M")
+            time_info = f"\n⏰ 到期 (北京时间): {expiry_beijing_str}"
+            print(f"⏰ 到期 (UTC): {expiry_time_utc_str} -> 北京时间: {expiry_beijing_str}")
         else:
             time_info = "\n⚠️ 未获取到时间信息"
+            expiry_time_utc_str = None
 
         url_line = "\nhttps://therose.cloud/"
 
@@ -345,34 +348,30 @@ def main():
 
         send_tg(TG_BOT_TOKEN, TG_CHAT_ID, msg)
 
-        # ---------- 自我调度（续期成功后，使用 UTC 时间计算触发点） ----------
-        if renewal_success:
-            print("🔄 续期成功，开始重新获取新的到期时间以安排下次执行...")
-            sb.open("https://client.therose.cloud/panel?routeName=servers")
-            sb.sleep(3)
-            new_start_utc, new_expiry_utc = get_server_time_info(sb)
-            if new_expiry_utc:
-                # 解析为 UTC 时间戳（已知时间为 UTC）
-                expiry_dt = datetime.strptime(new_expiry_utc, "%Y-%m-%d %H:%M")
-                expiry_ts = expiry_dt.timestamp()
+        # ---------- 自我调度（续期成功后，使用到期时间 UTC 计算触发点） ----------
+        if renewal_success and expiry_time_utc_str:
+            print("🔄 续期成功，开始安排下次执行...")
+            # 解析到期时间（UTC）
+            expiry_dt = datetime.strptime(expiry_time_utc_str, "%Y-%m-%d %H:%M")
+            expiry_ts = expiry_dt.timestamp()
 
-                if not all([GH_TOKEN, GH_REPO, GH_WORKFLOW_ID, CRONJOB_API_KEY]):
-                    print("⚠️ 缺少必要的环境变量，跳过调度")
-                else:
-                    for minutes_before in [20, 10]:
-                        trigger_ts = expiry_ts - (minutes_before * 60)
-                        if trigger_ts > time.time() + 60:
-                            success_schedule = schedule_via_cronjob(
-                                trigger_ts, GH_TOKEN, GH_REPO, GH_WORKFLOW_ID, CRONJOB_API_KEY
-                            )
-                            if success_schedule:
-                                print(f"✅ 已安排 {minutes_before} 分钟后触发")
-                            else:
-                                print(f"❌ 安排 {minutes_before} 分钟后触发失败")
-                        else:
-                            print(f"⚠️ 触发时间 {datetime.fromtimestamp(trigger_ts)} 已过期或太近，跳过")
+            if not all([GH_TOKEN, GH_REPO, GH_WORKFLOW_ID, CRONJOB_API_KEY]):
+                print("⚠️ 缺少必要的环境变量，跳过调度")
             else:
-                print("⚠️ 未能获取新的到期时间，跳过调度")
+                for minutes_before in [30, 15]:
+                    trigger_ts = expiry_ts - (minutes_before * 60)
+                    if trigger_ts > time.time() + 60:
+                        success_schedule = schedule_via_cronjob(
+                            trigger_ts, GH_TOKEN, GH_REPO, GH_WORKFLOW_ID, CRONJOB_API_KEY
+                        )
+                        if success_schedule:
+                            print(f"✅ 已安排 {minutes_before} 分钟后触发")
+                        else:
+                            print(f"❌ 安排 {minutes_before} 分钟后触发失败")
+                    else:
+                        print(f"⚠️ 触发时间 {datetime.fromtimestamp(trigger_ts)} 已过期或太近，跳过")
+        elif renewal_success and not expiry_time_utc_str:
+            print("⚠️ 未获取到期时间，跳过调度")
         else:
             print("ℹ️ 续期未成功，不安排下次执行（避免死循环）")
 
