@@ -1,6 +1,12 @@
 #!/usr/bin/env python3
 
-import os, re, sys, time, requests
+import os
+import re
+import sys
+import time
+import json
+import subprocess
+import requests
 from datetime import datetime, timedelta
 from seleniumbase import SB
 
@@ -10,6 +16,13 @@ PASSWORD = os.environ.get("PASSWORD") or ""
 TG_BOT_TOKEN = os.environ.get("TG_BOT_TOKEN") or ""
 TG_CHAT_ID = os.environ.get("TG_CHAT_ID") or ""
 PROXY_SERVER = os.environ.get("PROXY_SERVER") or ""   # socks5://127.0.0.1:1080
+
+# 调度相关环境变量（必须设置才能启用自动调度）
+CRONJOB_API_KEY = os.environ.get("CRONJOB_API_KEY") or ""
+GH_TOKEN = os.environ.get("GH_TOKEN") or ""
+GH_REPO = os.environ.get("GH_REPO") or ""            # 格式: "username/repo"
+GH_WORKFLOW_ID = os.environ.get("GH_WORKFLOW_ID") or ""  # 如 "renew.yml"
+HEADLESS = os.environ.get("HEADLESS", "true").lower() == "true"  # 默认无头模式
 
 BASE_URL = "https://client.therose.cloud/login"
 
@@ -223,6 +236,65 @@ def login(sb, email, password):
     # 所有尝试均失败
     return False, sb.get_current_url()
 
+# ========== 🆕 调度函数：通过 cron-job.org API 创建一次性任务 ==========
+def schedule_via_cronjob(trigger_timestamp, gh_token, repo, workflow_id, api_key, branch="main"):
+    """
+    通过 cron-job.org API 创建一个一次性定时任务，
+    任务会在 trigger_timestamp（Unix 时间戳）时刻向 GitHub workflow_dispatch API 发送 POST 请求。
+    返回: bool 是否成功创建
+    """
+    dt = datetime.fromtimestamp(trigger_timestamp)
+    # 构造精确到分钟的调度（使用 UTC 时区）
+    schedule = {
+        "minutes": [dt.minute],
+        "hours": [dt.hour],
+        "mdays": [dt.day],
+        "months": [dt.month],
+        "wdays": [-1],          # 不限定星期几
+        "timezone": "UTC",
+        "expiresAt": (dt + timedelta(minutes=1)).strftime("%Y%m%d%H%M%S")  # 触发后1分钟过期
+    }
+
+    # GitHub workflow_dispatch 的 URL
+    url = f"https://api.github.com/repos/{repo}/actions/workflows/{workflow_id}/dispatches"
+
+    # 构建请求体（包含 headers 和 body）
+    payload = {
+        "job": {
+            "enabled": True,
+            "title": f"Trigger renewal at {dt.isoformat()}",
+            "url": url,
+            "requestMethod": 1,   # 1 = POST
+            "extendedData": {
+                "headers": {
+                    "Accept": "application/vnd.github+json",
+                    "Authorization": f"Bearer {gh_token}",
+                    "X-GitHub-Api-Version": "2022-11-28",
+                    "Content-Type": "application/json"
+                },
+                "body": json.dumps({"ref": branch})   # 指定工作流运行的分支
+            }
+        }
+    }
+
+    headers = {
+        "Authorization": f"Bearer {api_key}",
+        "Content-Type": "application/json"
+    }
+
+    try:
+        resp = requests.put("https://api.cron-job.org/jobs", headers=headers, json=payload, timeout=30)
+        if resp.status_code == 200:
+            job_id = resp.json().get("jobId")
+            print(f"✅ 已创建 cron 任务 (ID: {job_id})，触发时间: {dt}")
+            return True
+        else:
+            print(f"❌ 创建 cron 任务失败: {resp.status_code} - {resp.text}")
+            return False
+    except Exception as e:
+        print(f"❌ 调用 cron-job.org API 异常: {e}")
+        return False
+
 # ========== 主流程 ==========
 def main():
     print("🚀 启动浏览器")
@@ -245,7 +317,8 @@ def main():
         f"🕐 北京时间: {beijing_time}"
     )
 
-    with SB(uc=True, headless=False, proxy=PROXY_SERVER or None,
+    # 使用 SB 上下文管理器，根据 HEADLESS 设置决定是否无头
+    with SB(uc=True, headless=HEADLESS, proxy=PROXY_SERVER or None,
             page_load_strategy='eager') as sb:
         success, url = login(sb, EMAIL, PASSWORD)
 
@@ -310,7 +383,7 @@ def main():
         renewal_success, renewal_msg = check_renewal_success(sb)
         screenshot_step(sb, "renewal_result")
 
-        # 构建最终消息（无论成功或失败都包含时间信息 + URL）
+        # 构建消息并发送 Telegram
         if renewal_success:
             msg = f"{base_header}\n\n✅ 续期成功！{renewal_msg}{time_info}{url_line}"
             print(msg)
@@ -319,10 +392,52 @@ def main():
             msg = f"{base_header}\n\n❌ 续期可能失败: {renewal_msg}{time_info}{url_line}"
             print(msg)
             sb.save_screenshot("renewal_failed.png")
-
         send_tg(TG_BOT_TOKEN, TG_CHAT_ID, msg)
 
+        # ========== 🆕 新增：自我调度（仅在续期成功后执行） ==========
+        if renewal_success:
+            print("🔄 续期成功，开始重新获取新的到期时间以安排下次执行...")
+            # 重新刷新服务器列表页面以获取最新开始时间
+            sb.open("https://client.therose.cloud/panel?routeName=servers")
+            sb.sleep(3)
+            new_start, new_expiry = get_server_time_info(sb)
+            if new_expiry:
+                # 将到期时间字符串解析为 datetime 对象（假设为 UTC）
+                # 注意：如果服务器返回的是北京时间，需要将时区转换为 UTC，这里假定为 UTC
+                expiry_dt = datetime.strptime(new_expiry, "%Y-%m-%d %H:%M")
+                expiry_ts = expiry_dt.timestamp()
+                # 读取环境变量（已在脚本开头读取，也可直接使用全局变量）
+                gh_token = os.environ.get("GH_TOKEN")
+                repo = os.environ.get("GH_REPO")
+                workflow_id = os.environ.get("GH_WORKFLOW_ID")
+                api_key = os.environ.get("CRONJOB_API_KEY")
+
+                if not all([gh_token, repo, workflow_id, api_key]):
+                    print("⚠️ 缺少必要的环境变量（GH_TOKEN/GH_REPO/GH_WORKFLOW_ID/CRONJOB_API_KEY），跳过调度")
+                else:
+                    # 安排两次触发：到期前 30 分钟 和 15 分钟
+                    for minutes_before in [30, 15]:
+                        trigger_ts = expiry_ts - (minutes_before * 60)
+                        # 确保触发时间在未来（至少当前时间之后几分钟）
+                        if trigger_ts > time.time() + 60:  # 至少1分钟后
+                            success_schedule = schedule_via_cronjob(
+                                trigger_ts, gh_token, repo, workflow_id, api_key
+                            )
+                            if success_schedule:
+                                print(f"✅ 已安排 {minutes_before} 分钟后触发")
+                            else:
+                                print(f"❌ 安排 {minutes_before} 分钟后触发失败")
+                        else:
+                            print(f"⚠️ 触发时间 {datetime.fromtimestamp(trigger_ts)} 已过期或太近，跳过")
+            else:
+                print("⚠️ 未能获取新的到期时间，跳过调度")
+        else:
+            print("ℹ️ 续期未成功，不安排下次执行（避免死循环）")
+
+        # ========== 结束调度 ==========
+
     print("🏁 脚本执行完毕")
+
 
 if __name__ == "__main__":
     main()
