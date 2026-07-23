@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 
 import os, re, sys, time, requests
+from datetime import datetime, timedelta
 from seleniumbase import SB
 
 # ========== 环境变量 ==========
@@ -51,6 +52,10 @@ def get_current_ip(proxy_server=None):
             return f"获取失败 (HTTP {response.status_code})"
     except Exception as e:
         return f"获取失败: {e}"
+
+def get_beijing_time():
+    """获取当前北京时间字符串 (UTC+8)"""
+    return (datetime.utcnow() + timedelta(hours=8)).strftime("%Y-%m-%d %H:%M:%S")
 
 # ========== 续期按钮点击 ==========
 def click_extend_button(sb):
@@ -106,20 +111,28 @@ def check_renewal_success(sb):
         pass
     return False, "未检测到续期成功提示"
 
-# ========== 获取有效期 ==========
-def get_expiry(sb):
-    xpath = '/html/body/div[1]/section/div/div[1]/div[2]/div/div/div/div[2]/div[2]/div[2]/div/span'
+# ========== 获取服务器开始时间和到期时间 ==========
+def get_server_time_info(sb):
+    """
+    从服务器列表页面提取开始时间（<span class="fw-bold text-muted">）
+    并计算 6 小时后的到期时间
+    返回: (开始时间字符串, 到期时间字符串)
+    """
     try:
-        sb.open("https://client.therose.cloud/panel?routeName=servers")
-        sb.sleep(3)
-        el = sb.find_element(f"xpath={xpath}", timeout=10)
+        el = sb.find_element('span.fw-bold.text-muted', timeout=10)
         if el:
-            text = el.text.strip()
-            print(f"📅 服务器有效期: {text}")
-            return text
+            start_time_str = el.text.strip()
+            print(f"📅 服务器开始时间: {start_time_str}")
+
+            start_time = datetime.strptime(start_time_str, "%Y-%m-%d %H:%M")
+            expiry_time = start_time + timedelta(hours=6)
+            expiry_time_str = expiry_time.strftime("%Y-%m-%d %H:%M")
+
+            print(f"⏰ 服务器到期时间: {expiry_time_str} (有效期6小时)")
+            return start_time_str, expiry_time_str
     except Exception as e:
-        print(f"⚠️ 获取有效期失败: {e}")
-    return "未知"
+        print(f"⚠️ 获取服务器时间信息失败: {e}")
+    return None, None
 
 # ========== 单次登录尝试（填写表单 + 处理验证码 + 点击登录） ==========
 def perform_login_attempt(sb, email, password, attempt_number):
@@ -222,30 +235,49 @@ def main():
     ip = get_current_ip(PROXY_SERVER or None)
     print(f"📍 当前出口 IP: {ip}")
 
+    # 获取北京时间
+    beijing_time = get_beijing_time()
+
+    # 构建基础通知头（含标题、账号、时间）
+    base_header = (
+        f"🌹 Therose cloud 自动续期\n"
+        f"👤 账号: {EMAIL}\n"
+        f"🕐 北京时间: {beijing_time}\n"
+    )
+
     with SB(uc=True, headless=False, proxy=PROXY_SERVER or None,
             page_load_strategy='eager') as sb:
         success, url = login(sb, EMAIL, PASSWORD)
 
         if not success:
-            msg = "❌ 登录失败，请检查账号密码、代理或网络"
+            msg = f"{base_header}\n❌ 登录失败，请检查账号密码、代理或网络"
             print(msg)
             send_tg(TG_BOT_TOKEN, TG_CHAT_ID, msg)
             return
 
-        # 登录成功后打开服务器列表
+        # 登录成功后打开服务器列表页面
         print("🌐 打开服务器列表页面...")
         sb.open("https://client.therose.cloud/panel?routeName=servers")
         sb.sleep(3)
         screenshot_step(sb, "server_list")
 
-        expiry = get_expiry(sb)
-        print(f"📅 当前有效期: {expiry}")
+        # 获取开始时间和计算的到期时间
+        start_time, expiry_time = get_server_time_info(sb)
 
-        # 开始续期
+        # 构建时间信息（确保通知中总是包含时间）
+        if start_time and expiry_time:
+            time_info = f"\n📅 开始: {start_time}\n⏰ 到期: {expiry_time}"
+            print(f"📅 服务器开始时间: {start_time}")
+            print(f"⏰ 服务器到期时间: {expiry_time} (有效期6小时)")
+        else:
+            time_info = "\n⚠️ 未获取到时间信息"
+            print("⚠️ 无法获取服务器时间信息")
+
+        # 开始续期流程
         print("📄 开始续期流程...")
         ok, info = click_extend_button(sb)
         if not ok:
-            msg = f"❌ 点击 Extend 按钮失败: {info.get('error')}"
+            msg = f"{base_header}\n❌ 点击 Extend 按钮失败: {info.get('error')}{time_info}"
             print(msg)
             send_tg(TG_BOT_TOKEN, TG_CHAT_ID, msg)
             return
@@ -262,12 +294,12 @@ def main():
                 print("✅ 已点击 Order now 按钮")
                 screenshot_step(sb, "ordernow_clicked")
             else:
-                msg = "❌ 未找到 Order now 按钮"
+                msg = f"{base_header}\n❌ 未找到 Order now 按钮{time_info}"
                 print(msg)
                 send_tg(TG_BOT_TOKEN, TG_CHAT_ID, msg)
                 return
         except Exception as e:
-            msg = f"❌ 点击 Order now 失败: {e}"
+            msg = f"{base_header}\n❌ 点击 Order now 失败: {e}{time_info}"
             print(msg)
             send_tg(TG_BOT_TOKEN, TG_CHAT_ID, msg)
             return
@@ -277,12 +309,13 @@ def main():
         renewal_success, renewal_msg = check_renewal_success(sb)
         screenshot_step(sb, "renewal_result")
 
+        # 构建最终消息（无论成功或失败都包含时间信息）
         if renewal_success:
-            msg = f"✅ 续期成功！{renewal_msg}\n📅 有效期: {expiry}"
+            msg = f"{base_header}\n✅ 续期成功！{renewal_msg}{time_info}"
             print(msg)
             sb.save_screenshot("renewal_success.png")
         else:
-            msg = f"❌ 续期可能失败: {renewal_msg}\n📅 有效期: {expiry}"
+            msg = f"{base_header}\n❌ 续期可能失败: {renewal_msg}{time_info}"
             print(msg)
             sb.save_screenshot("renewal_failed.png")
 
