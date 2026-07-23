@@ -367,7 +367,7 @@ def main():
             if not all([GH_TOKEN, GH_REPO, GH_WORKFLOW_ID, CRONJOB_API_KEY]):
                 print("⚠️ 缺少必要的环境变量，跳过调度")
             else:
-                for minutes_before in [30, 15]:
+                for minutes_before in [20, 10]:
                     trigger_ts = expiry_ts - (minutes_before * 60)
                     if trigger_ts > time.time() + 60:
                         success_schedule = schedule_via_cronjob(
