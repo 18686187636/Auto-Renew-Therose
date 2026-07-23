@@ -238,11 +238,12 @@ def main():
     # 获取北京时间
     beijing_time = get_beijing_time()
 
-    # 构建基础通知头（含标题、账号、时间）
+    # 构建基础通知头（含标题、账号、时间、网站链接）
     base_header = (
         f"🌹 Therose cloud 自动续期\n"
         f"👤 账号: {EMAIL}\n"
         f"🕐 北京时间: {beijing_time}\n"
+        f"🔗 https://client.therose.cloud/"
     )
 
     with SB(uc=True, headless=False, proxy=PROXY_SERVER or None,
@@ -250,7 +251,7 @@ def main():
         success, url = login(sb, EMAIL, PASSWORD)
 
         if not success:
-            msg = f"{base_header}\n❌ 登录失败，请检查账号密码、代理或网络"
+            msg = f"{base_header}\n\n❌ 登录失败，请检查账号密码、代理或网络"
             print(msg)
             send_tg(TG_BOT_TOKEN, TG_CHAT_ID, msg)
             return
@@ -277,7 +278,7 @@ def main():
         print("📄 开始续期流程...")
         ok, info = click_extend_button(sb)
         if not ok:
-            msg = f"{base_header}\n❌ 点击 Extend 按钮失败: {info.get('error')}{time_info}"
+            msg = f"{base_header}\n\n❌ 点击 Extend 按钮失败: {info.get('error')}{time_info}"
             print(msg)
             send_tg(TG_BOT_TOKEN, TG_CHAT_ID, msg)
             return
@@ -294,12 +295,12 @@ def main():
                 print("✅ 已点击 Order now 按钮")
                 screenshot_step(sb, "ordernow_clicked")
             else:
-                msg = f"{base_header}\n❌ 未找到 Order now 按钮{time_info}"
+                msg = f"{base_header}\n\n❌ 未找到 Order now 按钮{time_info}"
                 print(msg)
                 send_tg(TG_BOT_TOKEN, TG_CHAT_ID, msg)
                 return
         except Exception as e:
-            msg = f"{base_header}\n❌ 点击 Order now 失败: {e}{time_info}"
+            msg = f"{base_header}\n\n❌ 点击 Order now 失败: {e}{time_info}"
             print(msg)
             send_tg(TG_BOT_TOKEN, TG_CHAT_ID, msg)
             return
@@ -311,11 +312,11 @@ def main():
 
         # 构建最终消息（无论成功或失败都包含时间信息）
         if renewal_success:
-            msg = f"{base_header}\n✅ 续期成功！{renewal_msg}{time_info}"
+            msg = f"{base_header}\n\n✅ 续期成功！{renewal_msg}{time_info}"
             print(msg)
             sb.save_screenshot("renewal_success.png")
         else:
-            msg = f"{base_header}\n❌ 续期可能失败: {renewal_msg}{time_info}"
+            msg = f"{base_header}\n\n❌ 续期可能失败: {renewal_msg}{time_info}"
             print(msg)
             sb.save_screenshot("renewal_failed.png")
 
