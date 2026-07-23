@@ -1,10 +1,9 @@
 name: Auto Renew
 
 on:
-  workflow_dispatch:        # 允许手动及 API 触发
-  # 可选：保留一个非常低频的备用触发（例如每天一次），但主要靠调度
+  workflow_dispatch:
   schedule:
-    - cron: '0 0 * * *'     # 每天 UTC 0:00，作为保险
+    - cron: '0 0 * * *'
 
 jobs:
   renew:
@@ -16,9 +15,7 @@ jobs:
         with:
           python-version: '3.10'
       - name: Install dependencies
-        run: |
-          pip install seleniumbase requests
-          # 如果使用代理，可能需要安装额外的依赖
+        run: pip install seleniumbase requests
       - name: Run renewal script
         env:
           EMAIL: ${{ secrets.EMAIL }}
@@ -29,6 +26,5 @@ jobs:
           GH_TOKEN: ${{ secrets.GH_TOKEN }}
           GH_REPO: ${{ secrets.GH_REPO }}
           GH_WORKFLOW_ID: ${{ secrets.GH_WORKFLOW_ID }}
-          HEADLESS: true   # 无头模式
-          # PROXY_SERVER: ${{ secrets.PROXY_SERVER }}  # 可选
-        run: python renew.py
+          HEADLESS: true
+        run: python script.py
