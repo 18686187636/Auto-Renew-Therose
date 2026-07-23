@@ -1,12 +1,7 @@
 #!/usr/bin/env python3
 
-import os
-import re
-import sys
-import time
-import json
-import subprocess
-import requests
+import os, re, sys, time, requests
+import json                                      # 🆕 新增导入
 from datetime import datetime, timedelta
 from seleniumbase import SB
 
@@ -17,12 +12,11 @@ TG_BOT_TOKEN = os.environ.get("TG_BOT_TOKEN") or ""
 TG_CHAT_ID = os.environ.get("TG_CHAT_ID") or ""
 PROXY_SERVER = os.environ.get("PROXY_SERVER") or ""   # socks5://127.0.0.1:1080
 
-# 调度相关环境变量（必须设置才能启用自动调度）
+# 🆕 调度相关环境变量（可选，缺少则跳过调度）
 CRONJOB_API_KEY = os.environ.get("CRONJOB_API_KEY") or ""
 GH_TOKEN = os.environ.get("GH_TOKEN") or ""
-GH_REPO = os.environ.get("GH_REPO") or ""            # 格式: "username/repo"
+GH_REPO = os.environ.get("GH_REPO") or ""            # 格式 "owner/repo"
 GH_WORKFLOW_ID = os.environ.get("GH_WORKFLOW_ID") or ""  # 如 "renew.yml"
-HEADLESS = os.environ.get("HEADLESS", "true").lower() == "true"  # 默认无头模式
 
 BASE_URL = "https://client.therose.cloud/login"
 
@@ -177,7 +171,7 @@ def perform_login_attempt(sb, email, password, attempt_number):
     # 5. 处理 Turnstile
     print("🛡 处理 Turnstile...")
     try:
-        sb.uc_gui_click_captcha()
+        sb.uc_gui_click_captcha()   # 原样保留，未作修改
         print("✅ Turnstile 验证已处理")
     except Exception as e:
         print(f"⚠️ uc_gui_click_captcha 执行异常: {e}")
@@ -317,8 +311,7 @@ def main():
         f"🕐 北京时间: {beijing_time}"
     )
 
-    # 使用 SB 上下文管理器，根据 HEADLESS 设置决定是否无头
-    with SB(uc=True, headless=HEADLESS, proxy=PROXY_SERVER or None,
+    with SB(uc=True, headless=False, proxy=PROXY_SERVER or None,
             page_load_strategy='eager') as sb:
         success, url = login(sb, EMAIL, PASSWORD)
 
@@ -383,7 +376,7 @@ def main():
         renewal_success, renewal_msg = check_renewal_success(sb)
         screenshot_step(sb, "renewal_result")
 
-        # 构建消息并发送 Telegram
+        # 构建最终消息（无论成功或失败都包含时间信息 + URL）
         if renewal_success:
             msg = f"{base_header}\n\n✅ 续期成功！{renewal_msg}{time_info}{url_line}"
             print(msg)
@@ -392,9 +385,10 @@ def main():
             msg = f"{base_header}\n\n❌ 续期可能失败: {renewal_msg}{time_info}{url_line}"
             print(msg)
             sb.save_screenshot("renewal_failed.png")
+
         send_tg(TG_BOT_TOKEN, TG_CHAT_ID, msg)
 
-        # ========== 🆕 新增：自我调度（仅在续期成功后执行） ==========
+        # ========== 🆕 新增：自我调度（仅在续期成功且环境变量齐全时执行） ==========
         if renewal_success:
             print("🔄 续期成功，开始重新获取新的到期时间以安排下次执行...")
             # 重新刷新服务器列表页面以获取最新开始时间
@@ -402,26 +396,21 @@ def main():
             sb.sleep(3)
             new_start, new_expiry = get_server_time_info(sb)
             if new_expiry:
-                # 将到期时间字符串解析为 datetime 对象（假设为 UTC）
-                # 注意：如果服务器返回的是北京时间，需要将时区转换为 UTC，这里假定为 UTC
+                # 将到期时间字符串解析为 datetime 对象（假定为 UTC）
                 expiry_dt = datetime.strptime(new_expiry, "%Y-%m-%d %H:%M")
                 expiry_ts = expiry_dt.timestamp()
-                # 读取环境变量（已在脚本开头读取，也可直接使用全局变量）
-                gh_token = os.environ.get("GH_TOKEN")
-                repo = os.environ.get("GH_REPO")
-                workflow_id = os.environ.get("GH_WORKFLOW_ID")
-                api_key = os.environ.get("CRONJOB_API_KEY")
 
-                if not all([gh_token, repo, workflow_id, api_key]):
+                # 检查所需环境变量是否齐全
+                if not all([GH_TOKEN, GH_REPO, GH_WORKFLOW_ID, CRONJOB_API_KEY]):
                     print("⚠️ 缺少必要的环境变量（GH_TOKEN/GH_REPO/GH_WORKFLOW_ID/CRONJOB_API_KEY），跳过调度")
                 else:
                     # 安排两次触发：到期前 30 分钟 和 15 分钟
                     for minutes_before in [30, 15]:
                         trigger_ts = expiry_ts - (minutes_before * 60)
-                        # 确保触发时间在未来（至少当前时间之后几分钟）
-                        if trigger_ts > time.time() + 60:  # 至少1分钟后
+                        # 确保触发时间在未来（至少1分钟后）
+                        if trigger_ts > time.time() + 60:
                             success_schedule = schedule_via_cronjob(
-                                trigger_ts, gh_token, repo, workflow_id, api_key
+                                trigger_ts, GH_TOKEN, GH_REPO, GH_WORKFLOW_ID, CRONJOB_API_KEY
                             )
                             if success_schedule:
                                 print(f"✅ 已安排 {minutes_before} 分钟后触发")
@@ -433,11 +422,9 @@ def main():
                 print("⚠️ 未能获取新的到期时间，跳过调度")
         else:
             print("ℹ️ 续期未成功，不安排下次执行（避免死循环）")
-
-        # ========== 结束调度 ==========
+        # ========== 调度结束 ==========
 
     print("🏁 脚本执行完毕")
-
 
 if __name__ == "__main__":
     main()
