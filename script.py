@@ -250,7 +250,7 @@ def main():
         success, url = login(sb, EMAIL, PASSWORD)
 
         if not success:
-            msg = f"{base_header}\n\n❌ 登录失败，请检查账号密码、代理或网络\nhttps://client.therose.cloud/"
+            msg = f"{base_header}\n\n❌ 登录失败，请检查账号密码、代理或网络\nhttps://therose.cloud/"
             print(msg)
             send_tg(TG_BOT_TOKEN, TG_CHAT_ID, msg)
             return
@@ -265,7 +265,7 @@ def main():
         start_time, expiry_time = get_server_time_info(sb)
 
         # 构建时间信息和 URL 行
-        url_line = "\nhttps://client.therose.cloud/"
+        url_line = "\nhttps://therose.cloud/"
         if start_time and expiry_time:
             time_info = f"\n📅 开始: {start_time}\n⏰ 到期: {expiry_time}"
             print(f"📅 服务器开始时间: {start_time}")
