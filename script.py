@@ -107,7 +107,78 @@ def get_expiry(sb):
         print(f"⚠️ 获取有效期失败: {e}")
     return "未知"
 
-# ========== 登录流程（含等待、重试、截图） ==========
+# ========== 单次登录尝试（填写表单 + 处理验证码 + 点击登录） ==========
+def perform_login_attempt(sb, email, password, attempt_number):
+    """执行一次完整的登录尝试，返回 (success, url)"""
+    print(f"\n🔄 登录尝试 {attempt_number}/2")
+
+    # 1. 打开登录页
+    print("🌐 打开登录页面...")
+    sb.open(BASE_URL)
+    sb.wait_for_ready_state_complete()
+    sb.sleep(1)
+    screenshot_step(sb, f"attempt_{attempt_number}_page_loaded")
+
+    # 2. 填写邮箱
+    print("📧 填写邮箱...")
+    sb.type('#login_form_email', email, timeout=10)
+    screenshot_step(sb, f"attempt_{attempt_number}_email_filled")
+
+    # 3. 填写密码
+    print("🔑 填写密码...")
+    sb.type('#login_form_password', password, timeout=10)
+    screenshot_step(sb, f"attempt_{attempt_number}_password_filled")
+
+    # 4. 等待60秒（让 Turnstile 加载）
+    print("⏳ 等待60秒，确保 Turnstile 验证码完全加载...")
+    time.sleep(60)
+    screenshot_step(sb, f"attempt_{attempt_number}_after_60s_wait")
+
+    # 5. 处理 Turnstile
+    print("🛡 处理 Turnstile...")
+    try:
+        sb.uc_gui_click_captcha()
+        print("✅ Turnstile 验证已处理")
+    except Exception as e:
+        print(f"⚠️ uc_gui_click_captcha 执行异常: {e}")
+    screenshot_step(sb, f"attempt_{attempt_number}_captcha_handled")
+
+    # 6. 等待6秒（让验证生效）
+    print("⏳ 等待6秒，让验证生效...")
+    time.sleep(6)
+    screenshot_step(sb, f"attempt_{attempt_number}_after_6s_wait")
+
+    # 7. 点击登录按钮
+    print("🔑 点击登录按钮...")
+    sb.uc_click('button:contains("Sign in")')
+    screenshot_step(sb, f"attempt_{attempt_number}_login_clicked")
+    sb.sleep(5)
+
+    # 8. 等待跳转，检查是否成功
+    for i in range(30):
+        current_url = sb.get_current_url()
+        page_title = sb.get_title() or ""
+        print(f"📄 当前 URL: {current_url} | Title: {page_title}")
+
+        if "chrome-error" in current_url:
+            print("⚠️ 检测到 chrome-error 页面，尝试刷新...")
+            sb.refresh()
+            sb.sleep(3)
+            continue
+
+        if "panel" in current_url:
+            print("✅ 登录成功，已跳转到 Dashboard")
+            screenshot_step(sb, f"attempt_{attempt_number}_login_success")
+            return True, current_url
+        time.sleep(1)
+
+    # 如果循环结束仍未成功
+    print(f"❌ 登录尝试 {attempt_number} 失败，当前 URL: {sb.get_current_url()}")
+    screenshot_step(sb, f"attempt_{attempt_number}_login_failed")
+    sb.save_screenshot(f"login_failed_attempt_{attempt_number}.png")
+    return False, sb.get_current_url()
+
+# ========== 登录主函数（含重试） ==========
 def login(sb, email, password):
     # 设置超时（通过 driver 对象）
     try:
@@ -116,67 +187,14 @@ def login(sb, email, password):
     except Exception as e:
         print(f"⚠️ 设置超时失败: {e}")
 
-    for attempt in range(2):  # 最多重试2次
-        if attempt > 0:
-            print(f"\n🔄 重试登录 (第 {attempt+1} 次)...")
-            # 重新打开登录页
-            sb.open(BASE_URL)
-            sb.wait_for_ready_state_complete()
-            sb.sleep(2)
-            # 重新填写
-            print("📧 重新填写邮箱...")
-            sb.type('#login_form_email', email, timeout=10)
-            print("🔑 重新填写密码...")
-            sb.type('#login_form_password', password, timeout=10)
-            screenshot_step(sb, "retry_filled")
-            # 等待60秒
-            print("⏳ 等待60秒，确保 Turnstile 验证码完全加载...")
-            time.sleep(60)
-            screenshot_step(sb, "retry_after_wait")
-            # 处理 Turnstile
-            print("🛡 处理 Turnstile...")
-            try:
-                sb.uc_gui_click_captcha()
-                print("✅ Turnstile 验证已处理")
-            except Exception as e:
-                print(f"⚠️ uc_gui_click_captcha 执行异常: {e}")
-            screenshot_step(sb, "retry_captcha_handled")
-            # 等待6秒
-            print("⏳ 等待6秒，让验证生效...")
-            time.sleep(6)
-            screenshot_step(sb, "retry_after_6s")
+    # 最多尝试2次
+    for attempt in range(1, 3):
+        success, url = perform_login_attempt(sb, email, password, attempt)
+        if success:
+            return True, url
+        # 如果第一次失败，继续第二次；如果第二次失败，循环结束
 
-        # 点击登录按钮
-        print("🔑 点击登录按钮...")
-        sb.uc_click('button:contains("Sign in")')
-        screenshot_step(sb, "login_clicked")
-        sb.sleep(5)
-
-        # 等待跳转
-        for i in range(30):
-            current_url = sb.get_current_url()
-            page_title = sb.get_title() or ""
-            print(f"📄 当前 URL: {current_url} | Title: {page_title}")
-
-            # 如果出现 chrome-error，刷新后继续等待
-            if "chrome-error" in current_url:
-                print("⚠️ 检测到 chrome-error 页面，尝试刷新...")
-                sb.refresh()
-                sb.sleep(3)
-                continue
-
-            if "panel" in current_url:
-                print("✅ 登录成功，已跳转到 Dashboard")
-                screenshot_step(sb, "login_success")
-                return True, current_url
-            time.sleep(1)
-
-        # 本次尝试失败，截图记录
-        print(f"❌ 登录失败，当前 URL: {sb.get_current_url()}")
-        screenshot_step(sb, f"login_failed_attempt_{attempt+1}")
-        sb.save_screenshot(f"login_failed_attempt_{attempt+1}.png")
-
-    # 所有重试均失败
+    # 所有尝试均失败
     return False, sb.get_current_url()
 
 # ========== 主流程 ==========
@@ -187,7 +205,6 @@ def main():
     else:
         print("🍭 未使用代理，直连访问")
 
-    # 启动浏览器（有头模式，配合 Xvfb）
     with SB(uc=True, headless=False, proxy=PROXY_SERVER or None,
             page_load_strategy='eager') as sb:
         success, url = login(sb, EMAIL, PASSWORD)
