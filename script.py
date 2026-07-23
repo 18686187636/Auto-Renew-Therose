@@ -18,6 +18,9 @@ GH_TOKEN = os.environ.get("GH_TOKEN") or ""
 GH_REPO = os.environ.get("GH_REPO") or ""
 GH_WORKFLOW_ID = os.environ.get("GH_WORKFLOW_ID") or ""
 
+# 🆕 强制调度开关（即使续期失败也安排下次执行）
+FORCE_SCHEDULE = os.environ.get("FORCE_SCHEDULE", "false").lower() == "true"
+
 BASE_URL = "https://client.therose.cloud/login"
 
 if not EMAIL or not PASSWORD:
@@ -348,17 +351,25 @@ def main():
 
         send_tg(TG_BOT_TOKEN, TG_CHAT_ID, msg)
 
-        # ---------- 自我调度（续期成功后，使用到期时间 UTC 计算触发点） ----------
-        if renewal_success and expiry_time_utc_str:
-            print("🔄 续期成功，开始安排下次执行...")
+        # ---------- 自我调度（续期成功 或 强制调度开启 且 获取到到期时间） ----------
+        should_schedule = (renewal_success or FORCE_SCHEDULE) and expiry_time_utc_str is not None
+
+        if should_schedule:
+            if FORCE_SCHEDULE and not renewal_success:
+                print("🔄 强制调度模式已开启：即使续期未成功，仍安排下次执行（首次运行）")
+            elif renewal_success:
+                print("🔄 续期成功，开始安排下次执行...")
+            else:
+                print("🔄 开始安排下次执行...")
+
             # 解析到期时间（UTC）
             expiry_dt = datetime.strptime(expiry_time_utc_str, "%Y-%m-%d %H:%M")
             expiry_ts = expiry_dt.timestamp()
 
             if not all([GH_TOKEN, GH_REPO, GH_WORKFLOW_ID, CRONJOB_API_KEY]):
-                print("⚠️ 缺少必要的环境变量，跳过调度")
+                print("⚠️ 缺少必要的环境变量（CRONJOB_API_KEY / GH_TOKEN / GH_REPO / GH_WORKFLOW_ID），跳过调度")
             else:
-                for minutes_before in [5, 2]:
+                for minutes_before in [30, 15]:
                     trigger_ts = expiry_ts - (minutes_before * 60)
                     if trigger_ts > time.time() + 60:
                         success_schedule = schedule_via_cronjob(
@@ -370,10 +381,11 @@ def main():
                             print(f"❌ 安排 {minutes_before} 分钟后触发失败")
                     else:
                         print(f"⚠️ 触发时间 {datetime.fromtimestamp(trigger_ts)} 已过期或太近，跳过")
-        elif renewal_success and not expiry_time_utc_str:
-            print("⚠️ 未获取到期时间，跳过调度")
         else:
-            print("ℹ️ 续期未成功，不安排下次执行（避免死循环）")
+            if not renewal_success:
+                print("ℹ️ 续期未成功，且未开启强制调度，不安排下次执行（避免死循环）")
+            else:
+                print("⚠️ 未获取到到期时间，跳过调度")
 
     print("🏁 脚本执行完毕")
 
