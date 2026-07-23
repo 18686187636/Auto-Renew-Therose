@@ -12,13 +12,11 @@ TG_BOT_TOKEN = os.environ.get("TG_BOT_TOKEN") or ""
 TG_CHAT_ID = os.environ.get("TG_CHAT_ID") or ""
 PROXY_SERVER = os.environ.get("PROXY_SERVER") or ""
 
-# 调度相关环境变量（可选）
 CRONJOB_API_KEY = os.environ.get("CRONJOB_API_KEY") or ""
 GH_TOKEN = os.environ.get("GH_TOKEN") or ""
 GH_REPO = os.environ.get("GH_REPO") or ""
 GH_WORKFLOW_ID = os.environ.get("GH_WORKFLOW_ID") or ""
 
-# 🆕 强制调度开关（即使续期失败也安排下次执行）
 FORCE_SCHEDULE = os.environ.get("FORCE_SCHEDULE", "false").lower() == "true"
 
 BASE_URL = "https://client.therose.cloud/login"
@@ -86,7 +84,7 @@ def click_extend_button(sb):
     except Exception as e:
         return False, {"error": str(e)}
 
-# ========== 检查续期结果 ==========
+# ========== 检查续期结果（增强版） ==========
 def check_renewal_success(sb):
     success_selectors = [
         '.alert-success',
@@ -94,13 +92,15 @@ def check_renewal_success(sb):
         'div[role="alert"].alert-success',
         'div.alert-success',
         'span:contains("successfully purchased")',
-        'div:contains("successfully purchased")'
+        'div:contains("successfully purchased")',
+        'span:contains("purchased successfully")',
+        'div:contains("purchased successfully")'
     ]
-    print("⏳ 等待5秒检查续期结果...")
-    time.sleep(5)
+    print("⏳ 等待10秒检查续期结果...")
+    time.sleep(10)  # 增加等待时间
     for selector in success_selectors:
         try:
-            element = sb.find_element(selector, timeout=2)
+            element = sb.find_element(selector, timeout=3)
             if element:
                 text = element.text
                 print(f"✅ 发现成功提示！选择器: {selector}")
@@ -108,13 +108,16 @@ def check_renewal_success(sb):
                 return True, text
         except:
             continue
+    # 检查页面源码
     try:
         page_source = sb.get_page_source()
-        if "successfully purchased" in page_source.lower():
-            print("✅ 页面源码中发现 'successfully purchased' 关键词")
+        if "successfully purchased" in page_source.lower() or "purchased successfully" in page_source.lower():
+            print("✅ 页面源码中发现成功关键词")
             return True, "服务器已成功续期"
     except:
         pass
+    # 额外检查：是否已有新的到期时间（如果续期成功，到期时间应更新）
+    # 但我们在调度前会重新获取，所以此处不重复
     return False, "未检测到续期成功提示"
 
 # ========== 获取服务器到期时间（直接提取，不加偏移） ==========
@@ -127,7 +130,6 @@ def get_server_time_info(sb):
         if el:
             time_str = el.text.strip()
             print(f"📅 服务器到期时间 (UTC): {time_str}")
-            # 验证格式
             datetime.strptime(time_str, "%Y-%m-%d %H:%M")
             return time_str
     except Exception as e:
@@ -208,7 +210,7 @@ def login(sb, email, password):
             return True, url
     return False, sb.get_current_url()
 
-# ========== 调度函数 ==========
+# ========== 调度函数（增强日志） ==========
 def schedule_via_cronjob(trigger_timestamp, gh_token, repo, workflow_id, api_key, branch="main"):
     dt = datetime.fromtimestamp(trigger_timestamp)
     schedule = {
@@ -245,14 +247,20 @@ def schedule_via_cronjob(trigger_timestamp, gh_token, repo, workflow_id, api_key
         "Content-Type": "application/json"
     }
 
+    # 打印调试信息（不要打印敏感头）
+    print(f"📤 发送请求到 cron-job.org，触发时间: {dt}")
+    print(f"📤 Payload (部分): url={url}, schedule={schedule}")
+
     try:
         resp = requests.put("https://api.cron-job.org/jobs", headers=headers, json=payload, timeout=30)
+        print(f"📥 响应状态码: {resp.status_code}")
         if resp.status_code == 200:
             job_id = resp.json().get("jobId")
-            print(f"✅ 已创建 cron 任务 (ID: {job_id})，触发时间: {dt}")
+            print(f"✅ 已创建 cron 任务 (ID: {job_id})")
             return True
         else:
-            print(f"❌ 创建 cron 任务失败: {resp.status_code} - {resp.text}")
+            print(f"❌ 创建 cron 任务失败: HTTP {resp.status_code}")
+            print(f"❌ 响应内容: {resp.text[:500]}")  # 只打印前500字符
             return False
     except Exception as e:
         print(f"❌ 调用 cron-job.org API 异常: {e}")
@@ -294,7 +302,6 @@ def main():
         # ---------- 获取到期时间（UTC） ----------
         expiry_time_utc_str = get_server_time_info(sb)
         if expiry_time_utc_str:
-            # 转换为北京时间用于通知
             expiry_dt = datetime.strptime(expiry_time_utc_str, "%Y-%m-%d %H:%M")
             expiry_beijing = expiry_dt + timedelta(hours=8)
             expiry_beijing_str = expiry_beijing.strftime("%Y-%m-%d %H:%M")
@@ -362,14 +369,13 @@ def main():
             else:
                 print("🔄 开始安排下次执行...")
 
-            # 解析到期时间（UTC）
             expiry_dt = datetime.strptime(expiry_time_utc_str, "%Y-%m-%d %H:%M")
             expiry_ts = expiry_dt.timestamp()
 
             if not all([GH_TOKEN, GH_REPO, GH_WORKFLOW_ID, CRONJOB_API_KEY]):
-                print("⚠️ 缺少必要的环境变量（CRONJOB_API_KEY / GH_TOKEN / GH_REPO / GH_WORKFLOW_ID），跳过调度")
+                print("⚠️ 缺少必要的环境变量，跳过调度")
             else:
-                for minutes_before in [20, 10]:
+                for minutes_before in [30, 15]:
                     trigger_ts = expiry_ts - (minutes_before * 60)
                     if trigger_ts > time.time() + 60:
                         success_schedule = schedule_via_cronjob(
