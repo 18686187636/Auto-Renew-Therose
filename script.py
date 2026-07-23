@@ -122,10 +122,11 @@ def login(sb, email, password):
     sb.type('#login_form_password', password, timeout=10)
     screenshot_step(sb, "3_password_filled")
 
-    # ✅ 新增：等待60秒，让 Turnstile 完全加载
-    print("⏳ 等待60秒，确保 Turnstile 验证码加载完成...")
+    # ========== 新增：第三步后等待60秒 ==========
+    print("⏳ 等待60秒，确保 Turnstile 验证码完全加载...")
     time.sleep(60)
-    screenshot_step(sb, "3_after_wait")
+    screenshot_step(sb, "3_after_60s_wait")
+    # ==========================================
 
     print("🛡 处理 Turnstile...")
     try:
@@ -134,6 +135,12 @@ def login(sb, email, password):
     except Exception as e:
         print(f"⚠️ uc_gui_click_captcha 执行异常: {e}")
     screenshot_step(sb, "4_captcha_handled")
+
+    # ========== 新增：第四步后等待6秒 ==========
+    print("⏳ 等待6秒，让验证生效...")
+    time.sleep(6)
+    screenshot_step(sb, "4_after_6s_wait")
+    # =========================================
 
     print("🔑 点击登录按钮...")
     sb.uc_click('button:contains("Sign in")')
