@@ -58,6 +58,7 @@ def get_current_ip(proxy_server=None):
         return f"获取失败: {e}"
 
 def get_beijing_time():
+    # 仅用于通知头部显示当前北京时间，不影响调度
     return (datetime.utcnow() + timedelta(hours=8)).strftime("%Y-%m-%d %H:%M:%S")
 
 # ========== 续期按钮点击 ==========
@@ -269,7 +270,7 @@ def main():
     base_header = (
         f"🌹 Therose cloud 自动续期\n"
         f"👤 账号: {EMAIL}\n"
-        f"🕐 北京时间: {beijing_time}"
+        f"🕐 当前北京时间: {beijing_time}"
     )
 
     with SB(uc=True, headless=False, proxy=PROXY_SERVER or None,
@@ -287,21 +288,15 @@ def main():
         sb.sleep(3)
         screenshot_step(sb, "server_list")
 
-        # ---------- 获取时间信息（UTC）并转换为北京时间用于显示 ----------
+        # ---------- 获取时间信息（UTC）并直接用于通知 ----------
         start_time_utc_str, expiry_time_utc_str = get_server_time_info(sb)
 
         if start_time_utc_str and expiry_time_utc_str:
-            # 转换为北京时间
-            start_dt = datetime.strptime(start_time_utc_str, "%Y-%m-%d %H:%M") + timedelta(hours=8)
-            expiry_dt = datetime.strptime(expiry_time_utc_str, "%Y-%m-%d %H:%M") + timedelta(hours=8)
-            start_time_display = start_dt.strftime("%Y-%m-%d %H:%M")
-            expiry_time_display = expiry_dt.strftime("%Y-%m-%d %H:%M")
-            time_info = f"\n📅 开始: {start_time_display}\n⏰ 到期: {expiry_time_display}"
-            print(f"📅 北京时间开始: {start_time_display}")
-            print(f"⏰ 北京时间到期: {expiry_time_display}")
+            time_info = f"\n📅 开始 (UTC): {start_time_utc_str}\n⏰ 到期 (UTC): {expiry_time_utc_str}"
+            print(f"📅 开始 (UTC): {start_time_utc_str}")
+            print(f"⏰ 到期 (UTC): {expiry_time_utc_str}")
         else:
             time_info = "\n⚠️ 未获取到时间信息"
-            start_time_display = expiry_time_display = None
 
         url_line = "\nhttps://therose.cloud/"
 
