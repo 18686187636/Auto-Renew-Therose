@@ -405,7 +405,7 @@ def main():
                     print("⚠️ 缺少必要的环境变量（GH_TOKEN/GH_REPO/GH_WORKFLOW_ID/CRONJOB_API_KEY），跳过调度")
                 else:
                     # 安排两次触发：到期前 30 分钟 和 15 分钟
-                    for minutes_before in [30, 15]:
+                    for minutes_before in [20, 10]:
                         trigger_ts = expiry_ts - (minutes_before * 60)
                         # 确保触发时间在未来（至少1分钟后）
                         if trigger_ts > time.time() + 60:
