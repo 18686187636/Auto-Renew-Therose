@@ -97,7 +97,7 @@ def check_renewal_success(sb):
         'div:contains("purchased successfully")'
     ]
     print("⏳ 等待10秒检查续期结果...")
-    time.sleep(10)  # 增加等待时间
+    time.sleep(10)
     for selector in success_selectors:
         try:
             element = sb.find_element(selector, timeout=3)
@@ -108,7 +108,6 @@ def check_renewal_success(sb):
                 return True, text
         except:
             continue
-    # 检查页面源码
     try:
         page_source = sb.get_page_source()
         if "successfully purchased" in page_source.lower() or "purchased successfully" in page_source.lower():
@@ -116,15 +115,10 @@ def check_renewal_success(sb):
             return True, "服务器已成功续期"
     except:
         pass
-    # 额外检查：是否已有新的到期时间（如果续期成功，到期时间应更新）
-    # 但我们在调度前会重新获取，所以此处不重复
     return False, "未检测到续期成功提示"
 
 # ========== 获取服务器到期时间（直接提取，不加偏移） ==========
 def get_server_time_info(sb):
-    """
-    从服务器列表页面提取时间（实际为到期时间），直接返回该时间字符串（UTC）。
-    """
     try:
         el = sb.find_element('span.fw-bold.text-muted', timeout=10)
         if el:
@@ -210,7 +204,7 @@ def login(sb, email, password):
             return True, url
     return False, sb.get_current_url()
 
-# ========== 调度函数（增强日志） ==========
+# ========== 调度函数（精简版，符合官方文档） ==========
 def schedule_via_cronjob(trigger_timestamp, gh_token, repo, workflow_id, api_key, branch="main"):
     dt = datetime.fromtimestamp(trigger_timestamp)
     schedule = {
@@ -220,16 +214,17 @@ def schedule_via_cronjob(trigger_timestamp, gh_token, repo, workflow_id, api_key
         "months": [dt.month],
         "wdays": [-1],
         "timezone": "UTC",
-        "expiresAt": (dt + timedelta(minutes=1)).strftime("%Y%m%d%H%M%S")
+        "expiresAt": (dt + timedelta(minutes=5)).strftime("%Y%m%d%H%M%S")  # 触发后5分钟过期
     }
 
     url = f"https://api.github.com/repos/{repo}/actions/workflows/{workflow_id}/dispatches"
+
+    # 仅包含必填字段和扩展数据，其他使用默认值
     payload = {
         "job": {
             "enabled": True,
-            "title": f"Trigger renewal at {dt.isoformat()}",
             "url": url,
-            "requestMethod": 1,
+            "schedule": schedule,
             "extendedData": {
                 "headers": {
                     "Accept": "application/vnd.github+json",
@@ -247,10 +242,7 @@ def schedule_via_cronjob(trigger_timestamp, gh_token, repo, workflow_id, api_key
         "Content-Type": "application/json"
     }
 
-    # 打印调试信息（不要打印敏感头）
     print(f"📤 发送请求到 cron-job.org，触发时间: {dt}")
-    print(f"📤 Payload (部分): url={url}, schedule={schedule}")
-
     try:
         resp = requests.put("https://api.cron-job.org/jobs", headers=headers, json=payload, timeout=30)
         print(f"📥 响应状态码: {resp.status_code}")
@@ -260,7 +252,7 @@ def schedule_via_cronjob(trigger_timestamp, gh_token, repo, workflow_id, api_key
             return True
         else:
             print(f"❌ 创建 cron 任务失败: HTTP {resp.status_code}")
-            print(f"❌ 响应内容: {resp.text[:500]}")  # 只打印前500字符
+            print(f"❌ 响应内容: {resp.text[:500]}")
             return False
     except Exception as e:
         print(f"❌ 调用 cron-job.org API 异常: {e}")
@@ -385,6 +377,8 @@ def main():
                             print(f"✅ 已安排 {minutes_before} 分钟后触发")
                         else:
                             print(f"❌ 安排 {minutes_before} 分钟后触发失败")
+                        # 等待2秒，避免触发速率限制（429）
+                        time.sleep(2)
                     else:
                         print(f"⚠️ 触发时间 {datetime.fromtimestamp(trigger_ts)} 已过期或太近，跳过")
         else:
