@@ -38,6 +38,20 @@ def send_tg(token, chat_id, message):
     except Exception as e:
         print(f"❌ Telegram 发送异常: {e}")
 
+def get_current_ip(proxy_server=None):
+    """通过代理获取当前出口 IP"""
+    proxies = None
+    if proxy_server:
+        proxies = {"http": proxy_server, "https": proxy_server}
+    try:
+        response = requests.get("https://api.ip.sb/ip", proxies=proxies, timeout=15)
+        if response.status_code == 200:
+            return response.text.strip()
+        else:
+            return f"获取失败 (HTTP {response.status_code})"
+    except Exception as e:
+        return f"获取失败: {e}"
+
 # ========== 续期按钮点击 ==========
 def click_extend_button(sb):
     selectors = [
@@ -192,7 +206,6 @@ def login(sb, email, password):
         success, url = perform_login_attempt(sb, email, password, attempt)
         if success:
             return True, url
-        # 如果第一次失败，继续第二次；如果第二次失败，循环结束
 
     # 所有尝试均失败
     return False, sb.get_current_url()
@@ -204,6 +217,10 @@ def main():
         print(f"🔗 使用代理: {PROXY_SERVER}")
     else:
         print("🍭 未使用代理，直连访问")
+
+    # 获取并显示出口 IP
+    ip = get_current_ip(PROXY_SERVER or None)
+    print(f"📍 当前出口 IP: {ip}")
 
     with SB(uc=True, headless=False, proxy=PROXY_SERVER or None,
             page_load_strategy='eager') as sb:
