@@ -117,13 +117,25 @@ def check_renewal_success(sb):
         pass
     return False, "未检测到续期成功提示"
 
-# ========== 获取服务器到期时间（直接提取，不加偏移） ==========
-def get_server_time_info(sb):
+# ================================================
+# 修改点1：为 get_server_time_info 增加 refresh 参数
+# ================================================
+def get_server_time_info(sb, refresh=False):
+    """
+    获取服务器到期时间（UTC 字符串）
+    如果 refresh=True，则重新打开服务器列表页面获取最新时间
+    """
     try:
+        if refresh:
+            print("🔄 刷新服务器列表页面以获取最新到期时间...")
+            sb.open("https://client.therose.cloud/panel?routeName=servers")
+            sb.sleep(3)
+            screenshot_step(sb, "refresh_server_list")
         el = sb.find_element('span.fw-bold.text-muted', timeout=10)
         if el:
             time_str = el.text.strip()
             print(f"📅 服务器到期时间 (UTC): {time_str}")
+            # 验证格式
             datetime.strptime(time_str, "%Y-%m-%d %H:%M")
             return time_str
     except Exception as e:
@@ -214,18 +226,17 @@ def schedule_via_cronjob(trigger_timestamp, gh_token, repo, workflow_id, api_key
         "months": [dt.month],
         "wdays": [-1],
         "timezone": "UTC",
-        "expiresAt": (dt + timedelta(minutes=5)).strftime("%Y%m%d%H%M%S")  # 触发后5分钟过期
+        "expiresAt": (dt + timedelta(minutes=5)).strftime("%Y%m%d%H%M%S")
     }
 
     url = f"https://api.github.com/repos/{repo}/actions/workflows/{workflow_id}/dispatches"
 
-    # 构建完整任务配置，显式指定 requestMethod 并开启 saveResponses
     payload = {
         "job": {
             "enabled": True,
             "url": url,
-            "requestMethod": 1,              # POST
-            "saveResponses": True,            # 保存响应以便调试
+            "requestMethod": 1,
+            "saveResponses": True,
             "schedule": schedule,
             "extendedData": {
                 "headers": {
@@ -235,7 +246,7 @@ def schedule_via_cronjob(trigger_timestamp, gh_token, repo, workflow_id, api_key
                     "Content-Type": "application/json",
                     "User-Agent": "cron-job.org/1.0"
                 },
-                "body": json.dumps({"ref": branch})   # 单行 JSON
+                "body": json.dumps({"ref": branch})
             }
         }
     }
@@ -246,8 +257,6 @@ def schedule_via_cronjob(trigger_timestamp, gh_token, repo, workflow_id, api_key
     }
 
     print(f"📤 发送请求到 cron-job.org，触发时间: {dt}")
-    # 打印部分摘要用于调试
-    print(f"📤 Payload (摘要): url={url}, schedule={schedule}")
     try:
         resp = requests.put("https://api.cron-job.org/jobs", headers=headers, json=payload, timeout=30)
         print(f"📥 响应状态码: {resp.status_code}")
@@ -344,6 +353,27 @@ def main():
         renewal_success, renewal_msg = check_renewal_success(sb)
         screenshot_step(sb, "renewal_result")
 
+        # ========================================================
+        # 修改点2：续期成功后，重新获取最新的到期时间
+        # ========================================================
+        if renewal_success:
+            print("✅ 续期成功，重新获取最新到期时间...")
+            new_expiry_utc_str = get_server_time_info(sb, refresh=True)
+            if new_expiry_utc_str:
+                # 更新到期时间
+                expiry_time_utc_str = new_expiry_utc_str
+                expiry_dt = datetime.strptime(expiry_time_utc_str, "%Y-%m-%d %H:%M")
+                expiry_beijing = expiry_dt + timedelta(hours=8)
+                expiry_beijing_str = expiry_beijing.strftime("%Y-%m-%d %H:%M")
+                time_info = f"\n⏰ 到期 (北京时间): {expiry_beijing_str}"
+                print(f"⏰ 最新的到期 (UTC): {expiry_time_utc_str} -> 北京时间: {expiry_beijing_str}")
+            else:
+                print("⚠️ 重新获取时间失败，将使用之前的时间")
+                # 保留原有 time_info
+        else:
+            print("ℹ️ 续期未成功，不重新获取时间")
+
+        # 构建最终消息
         if renewal_success:
             msg = f"{base_header}\n\n✅ 续期成功！{renewal_msg}{time_info}{url_line}"
             print(msg)
@@ -355,7 +385,7 @@ def main():
 
         send_tg(TG_BOT_TOKEN, TG_CHAT_ID, msg)
 
-        # ---------- 自我调度（续期成功 或 强制调度开启 且 获取到到期时间） ----------
+        # ---------- 自我调度（使用最新到期时间） ----------
         should_schedule = (renewal_success or FORCE_SCHEDULE) and expiry_time_utc_str is not None
 
         if should_schedule:
@@ -382,7 +412,6 @@ def main():
                             print(f"✅ 已安排 {minutes_before} 分钟后触发")
                         else:
                             print(f"❌ 安排 {minutes_before} 分钟后触发失败")
-                        # 等待2秒，避免触发速率限制（429）
                         time.sleep(2)
                     else:
                         print(f"⚠️ 触发时间 {datetime.fromtimestamp(trigger_ts)} 已过期或太近，跳过")
