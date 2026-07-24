@@ -204,7 +204,7 @@ def login(sb, email, password):
             return True, url
     return False, sb.get_current_url()
 
-# ========== 调度函数（精简版，符合官方文档） ==========
+# ========== 调度函数（增强版，开启 saveResponses） ==========
 def schedule_via_cronjob(trigger_timestamp, gh_token, repo, workflow_id, api_key, branch="main"):
     dt = datetime.fromtimestamp(trigger_timestamp)
     schedule = {
@@ -219,20 +219,23 @@ def schedule_via_cronjob(trigger_timestamp, gh_token, repo, workflow_id, api_key
 
     url = f"https://api.github.com/repos/{repo}/actions/workflows/{workflow_id}/dispatches"
 
-    # 仅包含必填字段和扩展数据，其他使用默认值
+    # 构建完整任务配置，显式指定 requestMethod 并开启 saveResponses
     payload = {
         "job": {
             "enabled": True,
             "url": url,
+            "requestMethod": 1,              # POST
+            "saveResponses": True,            # 保存响应以便调试
             "schedule": schedule,
             "extendedData": {
                 "headers": {
                     "Accept": "application/vnd.github+json",
                     "Authorization": f"Bearer {gh_token}",
                     "X-GitHub-Api-Version": "2022-11-28",
-                    "Content-Type": "application/json"
+                    "Content-Type": "application/json",
+                    "User-Agent": "cron-job.org/1.0"
                 },
-                "body": json.dumps({"ref": branch})
+                "body": json.dumps({"ref": branch})   # 单行 JSON
             }
         }
     }
@@ -243,6 +246,8 @@ def schedule_via_cronjob(trigger_timestamp, gh_token, repo, workflow_id, api_key
     }
 
     print(f"📤 发送请求到 cron-job.org，触发时间: {dt}")
+    # 打印部分摘要用于调试
+    print(f"📤 Payload (摘要): url={url}, schedule={schedule}")
     try:
         resp = requests.put("https://api.cron-job.org/jobs", headers=headers, json=payload, timeout=30)
         print(f"📥 响应状态码: {resp.status_code}")
