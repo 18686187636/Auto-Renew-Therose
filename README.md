@@ -1,147 +1,223 @@
-# 🌹 The Rose Cloud 自动续期
+# TheRose Cloud 自动续期脚本
 
-通过 GitHub Actions 自动化续期 [The Rose Cloud](https://therose.cloud/) 服务器，并利用 **cron-job.org** 精准触发，彻底解决 GitHub 内置 `schedule` 延迟问题。
+> 自动登录 [TheRose Cloud](https://client.therose.cloud) 并续期服务器，支持 Telegram 通知与 cron-job.org 定时调度。
+
+---
+
+## 📖 简介
+
+本脚本通过浏览器自动化（SeleniumBase）模拟用户登录、绕过 Turnstile 验证码、点击续期按钮，并自动检查续期结果。同时，利用 [cron-job.org](https://cron-job.org) 的 API 在服务器到期前 **20 分钟**自动触发 GitHub Actions 工作流，实现全自动无人值守续期。
 
 ---
 
 ## ✨ 功能特点
 
-- ✅ **全自动续期**：登录面板 → 点击续期 → 确认成功，全程无人值守。
-- 🕒 **精准调度**：使用 cron-job.org API 创建一次性任务，在到期前 **20 分钟** 和 **10 分钟** 自动触发，无需担心 GitHub Actions 的定时延迟。
-- 🔁 **循环执行**：续期成功后自动重新计算新的到期时间，并安排下一次触发，形成闭环。
-- 🛡️ **支持代理**：可配置 VLESS 代理（通过 sing-box），适用于网络受限环境。
-- 📱 **Telegram 通知**：实时推送续期结果和到期时间（北京时间）。
-- 🚀 **首次运行友好**：通过 `FORCE_SCHEDULE=true` 强制调度，避免首次执行失败后无法进入循环。
+- ✅ 自动登录 TheRose Cloud 面板
+- 🛡️ 内置 Turnstile 验证码处理（`uc_gui_click_captcha`）
+- 📸 关键步骤自动截图，便于调试
+- 📨 续期结果通过 Telegram 实时通知
+- 🔄 续期成功后自动获取最新到期时间
+- ⏰ 在服务器到期前 **20 分钟**自动设置 cron-job 任务（仅保留一个）
+- 🚀 支持代理（HTTP/SOCKS）和强制调度模式
 
 ---
 
-## 🔧 工作原理
+## 🧰 环境变量
 
-```mermaid
-graph TD
-    A[GitHub Actions 触发] --> B[登录 The Rose Cloud]
-    B --> C[获取服务器到期时间（UTC）]
-    C --> D[点击 Extend / Order now 续期]
-    D --> E{续期成功？}
-    E -->|是| F[重新获取新到期时间]
-    E -->|否| G{FORCE_SCHEDULE?}
-    F --> H[通过 cron-job.org API 创建两个一次性任务]
-    G -->|是| H
-    G -->|否| I[结束（不调度）]
-    H --> J[到期前30分钟、15分钟触发 GitHub Actions]
-    J --> A
-```
+| 变量名 | 必填 | 说明 |
+|--------|------|------|
+| `EMAIL` | ✅ | TheRose Cloud 登录邮箱 |
+| `PASSWORD` | ✅ | TheRose Cloud 登录密码 |
+| `TG_BOT_TOKEN` | ❌ | Telegram Bot Token（如需通知） |
+| `TG_CHAT_ID` | ❌ | Telegram 接收消息的 Chat ID |
+| `PROXY_SERVER` | ❌ | 代理地址，例如 `http://127.0.0.1:7890` |
+| `CRONJOB_API_KEY` | ⚠️ | cron-job.org API Key（如需自动调度） |
+| `GH_TOKEN` | ⚠️ | GitHub Personal Access Token（用于触发 workflow） |
+| `GH_REPO` | ⚠️ | GitHub 仓库名，格式 `owner/repo` |
+| `GH_WORKFLOW_ID` | ⚠️ | GitHub Actions 工作流 ID（数字） |
+| `FORCE_SCHEDULE` | ❌ | 设为 `true` 时，即使续期失败也强制创建调度任务（用于首次运行） |
 
-- **当前运行**：脚本执行登录、续期、获取新到期时间。
-- **调度安排**：续期成功后（或强制模式开启），调用 cron-job.org API 创建两个一次性定时任务，分别设置在到期时间前 30 分钟和 15 分钟触发。
-- **下次触发**：当 cron-job.org 到达指定时间，向 GitHub API 发送 `workflow_dispatch` 请求，启动新一轮工作流。
+> ⚠️ 表示：若需启用自动调度功能，则这些变量必须全部设置。
 
 ---
 
-## 📦 准备工作
+## 📦 安装依赖
 
-1. **cron-job.org 账号**  
-   - 注册 [cron-job.org](https://cron-job.org)。
-   - 进入控制台 → **Authorization** → 生成 API 密钥（Bearer Token）。
-
-2. **GitHub Personal Access Token**  
-   - 生成具有 `repo` 权限的 [经典 PAT](https://github.com/settings/tokens)（勾选 `repo` 范围）。
-
-3. **The Rose Cloud 账号**  
-   - 注册并获取登录邮箱和密码。
-
-4. **（可选）Telegram Bot**  
-   - 创建 Bot 并获取 `BOT_TOKEN` 和 `CHAT_ID`，用于接收通知。
-
----
-
-## ⚙️ 环境变量配置
-
-在 GitHub 仓库的 **Settings → Secrets and variables → Actions → Secrets** 中添加以下变量：
-
-| 变量名 | 是否必填 | 说明 |
-|--------|----------|------|
-| `EMAIL` | ✅ | The Rose Cloud 登录邮箱 |
-| `PASSWORD` | ✅ | The Rose Cloud 登录密码 |
-| `CRONJOB_API_KEY` | ✅（启用调度） | cron-job.org API 密钥 |
-| `GH_TOKEN` | ✅（启用调度） | GitHub Personal Access Token（`repo` 权限） |
-| `GH_REPO` | ✅（启用调度） | 仓库全名，如 `your-username/your-repo` |
-| `GH_WORKFLOW_ID` | ✅（启用调度） | 工作流文件名，如 `renew.yml` |
-| `TG_BOT_TOKEN` | ❌ | Telegram Bot Token（可选） |
-| `TG_CHAT_ID` | ❌ | Telegram 接收 ID（可选） |
-| `NODE_LINK` | ❌ | VLESS 代理链接（如需代理，格式 `vless://...`） |
-| `FORCE_SCHEDULE` | ❌ | 首次运行强制调度，设为 `"true"` |
-
-> **注意**：`FORCE_SCHEDULE` 默认为 `false`，仅在需要强制调度时设置为 `"true"`（例如首次部署）。
-
----
-
-## 🚀 部署到 GitHub Actions
-
-1. **Fork 本仓库** 或将脚本文件放入您的仓库。
-2. **配置 Secrets**（见上表）。
-3. **启用工作流**：默认仅在 `workflow_dispatch` 手动触发，您可以取消 `renew.yml` 中 `schedule` 的注释以增加一个备用定期触发（但主要依靠 cron-job.org）。
-4. **首次运行**：手动触发一次工作流（Actions → Run workflow），确保 `FORCE_SCHEDULE=true` 以建立循环。
-5. **后续**：将 `FORCE_SCHEDULE` 改为 `false` 或删除，避免非正常调度。
-
----
-
-## 🖥️ 本地运行（调试用）
+推荐使用 Python 3.8+ 和虚拟环境：
 
 ```bash
+# 克隆仓库
+git clone https://github.com/your-username/therose-renew.git
+cd therose-renew
+
+# 创建虚拟环境（可选）
+python3 -m venv venv
+source venv/bin/activate  # Windows: venv\Scripts\activate
+
 # 安装依赖
-pip install seleniumbase requests
-
-# 设置环境变量（示例）
-export EMAIL="your-email@example.com"
-export PASSWORD="your-password"
-export CRONJOB_API_KEY="your-api-key"
-export GH_TOKEN="your-gh-token"
-export GH_REPO="your-username/your-repo"
-export GH_WORKFLOW_ID="renew.yml"
-export FORCE_SCHEDULE="true"   # 可选
-
-# 运行脚本（需要 X11 或虚拟显示）
-python script.py
+pip install -r requirements.txt
 ```
 
-若需代理，设置 `PROXY_SERVER=socks5://127.0.0.1:1080`（可由 `NODE_LINK` 自动配置）。
+`requirements.txt` 内容示例：
+
+```
+seleniumbase
+requests
+```
+
+另外，脚本依赖浏览器驱动（Chrome/Chromium），SeleniumBase 会自动下载，您也可以手动安装 `chromedriver`。
 
 ---
 
-## 📁 文件结构
+## 🚀 使用方法
 
+### 1. 手动运行
+
+设置好环境变量后，直接执行：
+
+```bash
+python renew.py
 ```
-.
-├── .github/
-│   └── workflows/
-│       └── renew.yml          # GitHub Actions 工作流
-├── script.py                  # 主续期脚本
-└── README.md                  # 本文件
+
+脚本会：
+- 打开浏览器（非 headless 模式）
+- 登录面板
+- 进入服务器列表
+- 点击 `Extend` → `Order now`
+- 检查续期结果
+- 发送 Telegram 通知
+- 若续期成功，则调用 cron-job.org 在到期前 20 分钟触发 GitHub Actions
+
+### 2. GitHub Actions 自动化（推荐）
+
+您可以在仓库中创建 `.github/workflows/renew.yml`，并配置定时触发（例如每天一次）。当 cron-job 触发时，会自动运行该 workflow。
+
+示例 workflow：
+
+```yaml
+name: Auto Renew
+on:
+  workflow_dispatch:
+  schedule:
+    - cron: '0 0 * * *'  # 每天UTC 0点，可自行调整
+
+jobs:
+  renew:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v3
+      - name: Set up Python
+        uses: actions/setup-python@v4
+        with:
+          python-version: '3.10'
+      - name: Install dependencies
+        run: pip install -r requirements.txt
+      - name: Run renew script
+        env:
+          EMAIL: ${{ secrets.EMAIL }}
+          PASSWORD: ${{ secrets.PASSWORD }}
+          TG_BOT_TOKEN: ${{ secrets.TG_BOT_TOKEN }}
+          TG_CHAT_ID: ${{ secrets.TG_CHAT_ID }}
+          PROXY_SERVER: ${{ secrets.PROXY_SERVER }}
+          CRONJOB_API_KEY: ${{ secrets.CRONJOB_API_KEY }}
+          GH_TOKEN: ${{ secrets.GH_TOKEN }}
+          GH_REPO: ${{ github.repository }}
+          GH_WORKFLOW_ID: ${{ secrets.GH_WORKFLOW_ID }}
+          FORCE_SCHEDULE: "true"  # 第一次运行时启用
+        run: python renew.py
 ```
+
+### 3. 通过 cron-job.org 触发
+
+当脚本成功续期后，它会调用 cron-job.org API 创建一个（或更新已有的）定时任务，该任务在服务器到期前 **20 分钟** 向 GitHub API 发送 `workflow_dispatch` 请求，从而触发上述 workflow，再次运行续期脚本。
+
+这样就形成了一个闭环：每次续期成功后，自动安排下次执行，无需人工干预。
 
 ---
 
-## ⚠️ 注意事项
+## ⚙️ 调度逻辑说明
 
-- **时区**：网站显示的到期时间为 **UTC**，脚本直接使用 UTC 计算调度，Telegram 通知会转换为北京时间显示。
-- **验证码**：脚本使用 SeleniumBase 的 `uc_gui_click_captcha()` 处理 Turnstile，在无头模式下可能失败。GitHub Actions 中使用 `xvfb-run` 模拟图形环境，可正常运行。
-- **调度频率**：cron-job.org 免费版每日 100 次 API 调用，本方案每次续期创建 2 个任务（每天约 8 个），远低于限制。
-- **令牌过期**：`GH_TOKEN` 和 `CRONJOB_API_KEY` 均有有效期，请及时轮换。
-- **首次运行**：务必设置 `FORCE_SCHEDULE=true`，否则若续期失败将无法建立循环。
+- 脚本会从页面获取服务器到期时间（UTC 格式 `%Y-%m-%d %H:%M`）
+- 将到期时间转换为时间戳，减去 20 分钟作为触发时间
+- 调用 `schedule_via_cronjob()` 函数：
+  - 先查询 cron-job.org 上所有现有任务
+  - 若存在相同 `url`（即相同的 GitHub workflow 触发地址）的任务，则删除多余的，只保留一个并更新其调度时间
+  - 若不存在，则创建一个新任务
+- **保证全局只有 1 个定时任务**，且每次运行都会刷新触发时间
+
+---
+
+## 📸 截图与调试
+
+脚本会在以下时机自动截图（保存为 `step_*.png`）：
+- 登录页面加载后
+- 填写表单后
+- 处理验证码后
+- 点击登录后
+- 服务器列表页
+- 续期操作后
+- 最终结果
+
+这些截图可用于排查问题。
+
+---
+
+## 📨 Telegram 通知
+
+若设置了 `TG_BOT_TOKEN` 和 `TG_CHAT_ID`，脚本会在以下情况发送通知：
+- 登录失败
+- 续期成功/失败
+- 包含当前北京时间、账号信息和到期时间
+
+---
+
+## 🔒 安全建议
+
+- 请将 `EMAIL`、`PASSWORD`、`GH_TOKEN` 等敏感信息保存在 GitHub Secrets 或本地 `.env` 文件中，切勿硬编码
+- 若使用代理，确保代理稳定且可访问目标网站
+- 建议在 GitHub Actions 中启用 `FORCE_SCHEDULE` 仅在首次运行时使用，之后可关闭，避免意外调度
+
+---
+
+## 🐛 常见问题
+
+### 1. 登录失败 / Turnstile 无法通过
+- 检查网络环境（尝试更换代理）
+- 增加 `sleep` 等待时间（脚本已内置 60 秒等待，可自行调整）
+- 手动打开浏览器测试是否能正常登录
+
+### 2. 未找到 Extend 按钮
+- 确认账户下存在有效服务器
+- 检查页面布局是否变化（可截图对比）
+
+### 3. cron-job.org 调度失败
+- 确认 API Key 有创建/更新任务的权限
+- 检查环境变量是否齐全
+- 查看 API 响应日志（脚本会打印错误信息）
+
+### 4. 任务重复创建
+- 已采用“查询-更新-删除冗余”策略，理论上只保留一个任务。若仍有多个，可检查 `url` 字段是否完全一致（包括尾部斜杠等）
 
 ---
 
 ## 📄 许可证
 
-MIT License © 2026 [Your Name]
+本项目采用 [MIT License](LICENSE)。
 
 ---
 
 ## 🤝 贡献
 
-欢迎提交 Issue 或 Pull Request，共同完善此工具。
+欢迎提交 Issue 和 Pull Request。若有改进建议，请随时联系。
 
 ---
 
-**祝您使用愉快！** 如有问题，请提交 Issue 或联系作者。
+## 📎 相关链接
+
+- [TheRose Cloud](https://client.therose.cloud)
+- [cron-job.org](https://cron-job.org)
+- [SeleniumBase 文档](https://seleniumbase.io)
+
+---
+
+**Happy Renewing! 🌹**
