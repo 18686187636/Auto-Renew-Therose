@@ -90,42 +90,8 @@ python renew.py
 
 ### 2. GitHub Actions 自动化（推荐）
 
-您可以在仓库中创建 `.github/workflows/renew.yml`，并配置定时触发（例如每天一次）。当 cron-job 触发时，会自动运行该 workflow。
+您可以在仓库中创建 `.github/workflows/renew.yml`，并配置。当 cron-job 触发时，会自动运行该 workflow。
 
-示例 workflow：
-
-```yaml
-name: Auto Renew
-on:
-  workflow_dispatch:
-  schedule:
-    - cron: '0 0 * * *'  # 每天UTC 0点，可自行调整
-
-jobs:
-  renew:
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v3
-      - name: Set up Python
-        uses: actions/setup-python@v4
-        with:
-          python-version: '3.10'
-      - name: Install dependencies
-        run: pip install -r requirements.txt
-      - name: Run renew script
-        env:
-          EMAIL: ${{ secrets.EMAIL }}
-          PASSWORD: ${{ secrets.PASSWORD }}
-          TG_BOT_TOKEN: ${{ secrets.TG_BOT_TOKEN }}
-          TG_CHAT_ID: ${{ secrets.TG_CHAT_ID }}
-          PROXY_SERVER: ${{ secrets.PROXY_SERVER }}
-          CRONJOB_API_KEY: ${{ secrets.CRONJOB_API_KEY }}
-          GH_TOKEN: ${{ secrets.GH_TOKEN }}
-          GH_REPO: ${{ github.repository }}
-          GH_WORKFLOW_ID: ${{ secrets.GH_WORKFLOW_ID }}
-          FORCE_SCHEDULE: "true"  # 第一次运行时启用
-        run: python renew.py
-```
 
 ### 3. 通过 cron-job.org 触发
 
