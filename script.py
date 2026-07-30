@@ -216,7 +216,9 @@ def login(sb, email, password):
             return True, url
     return False, sb.get_current_url()
 
-# ========== 调度函数（增强版，开启 saveResponses） ==========
+# ================================================
+# 修改点2：改进的调度函数，确保全局只有一个任务
+# ================================================
 def schedule_via_cronjob(trigger_timestamp, gh_token, repo, workflow_id, api_key, branch="main"):
     dt = datetime.fromtimestamp(trigger_timestamp)
     schedule = {
@@ -229,12 +231,12 @@ def schedule_via_cronjob(trigger_timestamp, gh_token, repo, workflow_id, api_key
         "expiresAt": (dt + timedelta(minutes=5)).strftime("%Y%m%d%H%M%S")
     }
 
-    url = f"https://api.github.com/repos/{repo}/actions/workflows/{workflow_id}/dispatches"
+    dispatch_url = f"https://api.github.com/repos/{repo}/actions/workflows/{workflow_id}/dispatches"
 
     payload = {
         "job": {
             "enabled": True,
-            "url": url,
+            "url": dispatch_url,
             "requestMethod": 1,
             "saveResponses": True,
             "schedule": schedule,
@@ -256,20 +258,58 @@ def schedule_via_cronjob(trigger_timestamp, gh_token, repo, workflow_id, api_key
         "Content-Type": "application/json"
     }
 
-    print(f"📤 发送请求到 cron-job.org，触发时间: {dt}")
+    print(f"📤 调度触发时间: {dt} (UTC)")
+
     try:
-        resp = requests.put("https://api.cron-job.org/jobs", headers=headers, json=payload, timeout=30)
-        print(f"📥 响应状态码: {resp.status_code}")
-        if resp.status_code == 200:
-            job_id = resp.json().get("jobId")
-            print(f"✅ 已创建 cron 任务 (ID: {job_id})")
-            return True
+        # 1. 获取所有现有任务
+        resp = requests.get("https://api.cron-job.org/jobs", headers=headers, timeout=30)
+        resp.raise_for_status()
+        jobs_data = resp.json()
+        jobs = jobs_data.get("jobs", [])
+        print(f"📋 现有任务数量: {len(jobs)}")
+
+        # 查找与 dispatch_url 匹配的任务
+        matching_jobs = [j for j in jobs if j.get("url") == dispatch_url]
+
+        # 删除多余的匹配任务（只保留第一个）
+        for job in matching_jobs[1:]:
+            job_id = job.get("jobId")
+            if job_id:
+                del_resp = requests.delete(f"https://api.cron-job.org/jobs/{job_id}", headers=headers, timeout=30)
+                if del_resp.status_code == 200:
+                    print(f"🗑️ 已删除多余的 job {job_id}")
+                else:
+                    print(f"⚠️ 删除 job {job_id} 失败: {del_resp.status_code}")
+
+        if matching_jobs:
+            # 更新第一个匹配的任务
+            job_id = matching_jobs[0].get("jobId")
+            print(f"🔄 更新现有任务 ID: {job_id}")
+            update_resp = requests.patch(
+                f"https://api.cron-job.org/jobs/{job_id}",
+                headers=headers,
+                json=payload,
+                timeout=30
+            )
+            if update_resp.status_code == 200:
+                print(f"✅ 任务已更新，ID: {job_id}")
+                return True
+            else:
+                print(f"❌ 更新任务失败: {update_resp.status_code} {update_resp.text}")
+                return False
         else:
-            print(f"❌ 创建 cron 任务失败: HTTP {resp.status_code}")
-            print(f"❌ 响应内容: {resp.text[:500]}")
-            return False
+            # 没有匹配的任务，创建新任务
+            print("📤 创建新任务...")
+            create_resp = requests.put("https://api.cron-job.org/jobs", headers=headers, json=payload, timeout=30)
+            if create_resp.status_code == 200:
+                job_id = create_resp.json().get("jobId")
+                print(f"✅ cron-job 创建成功，ID: {job_id}")
+                return True
+            else:
+                print(f"❌ 创建任务失败: {create_resp.status_code} {create_resp.text}")
+                return False
     except Exception as e:
-        print(f"❌ 调用 cron-job.org API 异常: {e}")
+        print(f"❌ 操作 cron-job.org API 异常: {e}")
         return False
 
 # ========== 主流程 ==========
@@ -354,13 +394,12 @@ def main():
         screenshot_step(sb, "renewal_result")
 
         # ========================================================
-        # 修改点2：续期成功后，重新获取最新的到期时间
+        # 续期成功后，重新获取最新的到期时间
         # ========================================================
         if renewal_success:
             print("✅ 续期成功，重新获取最新到期时间...")
             new_expiry_utc_str = get_server_time_info(sb, refresh=True)
             if new_expiry_utc_str:
-                # 更新到期时间
                 expiry_time_utc_str = new_expiry_utc_str
                 expiry_dt = datetime.strptime(expiry_time_utc_str, "%Y-%m-%d %H:%M")
                 expiry_beijing = expiry_dt + timedelta(hours=8)
@@ -369,7 +408,6 @@ def main():
                 print(f"⏰ 最新的到期 (UTC): {expiry_time_utc_str} -> 北京时间: {expiry_beijing_str}")
             else:
                 print("⚠️ 重新获取时间失败，将使用之前的时间")
-                # 保留原有 time_info
         else:
             print("ℹ️ 续期未成功，不重新获取时间")
 
@@ -385,7 +423,7 @@ def main():
 
         send_tg(TG_BOT_TOKEN, TG_CHAT_ID, msg)
 
-        # ---------- 自我调度（使用最新到期时间） ----------
+        # ---------- 自我调度（只调度一次，20分钟前） ----------
         should_schedule = (renewal_success or FORCE_SCHEDULE) and expiry_time_utc_str is not None
 
         if should_schedule:
@@ -402,19 +440,19 @@ def main():
             if not all([GH_TOKEN, GH_REPO, GH_WORKFLOW_ID, CRONJOB_API_KEY]):
                 print("⚠️ 缺少必要的环境变量，跳过调度")
             else:
-                for minutes_before in [20, 10]:
-                    trigger_ts = expiry_ts - (minutes_before * 60)
-                    if trigger_ts > time.time() + 60:
-                        success_schedule = schedule_via_cronjob(
-                            trigger_ts, GH_TOKEN, GH_REPO, GH_WORKFLOW_ID, CRONJOB_API_KEY
-                        )
-                        if success_schedule:
-                            print(f"✅ 已安排 {minutes_before} 分钟后触发")
-                        else:
-                            print(f"❌ 安排 {minutes_before} 分钟后触发失败")
-                        time.sleep(2)
+                # 只调度一次：到期前20分钟
+                minutes_before = 20
+                trigger_ts = expiry_ts - (minutes_before * 60)
+                if trigger_ts > time.time() + 60:
+                    success_schedule = schedule_via_cronjob(
+                        trigger_ts, GH_TOKEN, GH_REPO, GH_WORKFLOW_ID, CRONJOB_API_KEY
+                    )
+                    if success_schedule:
+                        print(f"✅ 已安排 {minutes_before} 分钟后触发")
                     else:
-                        print(f"⚠️ 触发时间 {datetime.fromtimestamp(trigger_ts)} 已过期或太近，跳过")
+                        print(f"❌ 安排 {minutes_before} 分钟后触发失败")
+                else:
+                    print(f"⚠️ 触发时间 {datetime.fromtimestamp(trigger_ts)} 已过期或太近，跳过")
         else:
             if not renewal_success:
                 print("ℹ️ 续期未成功，且未开启强制调度，不安排下次执行（避免死循环）")
