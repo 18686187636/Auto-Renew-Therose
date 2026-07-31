@@ -82,7 +82,6 @@ def click_extend_button(sb):
             element = sb.find_element(sel, timeout=3)
             if element:
                 print(f"✅ 找到 Extend 按钮，选择器: {sel}")
-                # 使用 JS 点击，避免任何复杂交互
                 sb.driver.execute_script("arguments[0].scrollIntoView({block: 'center'});", element)
                 time.sleep(0.5)
                 sb.driver.execute_script("arguments[0].click();", element)
@@ -91,7 +90,6 @@ def click_extend_button(sb):
         except Exception as e:
             print(f"⚠️ 选择器 {sel} 失败: {e}")
             continue
-    # 最后尝试遍历所有按钮
     try:
         buttons = sb.find_elements('button')
         for btn in buttons:
@@ -106,9 +104,8 @@ def click_extend_button(sb):
         return False, {"error": str(e)}
     return False, {"error": "未找到 Extend 按钮"}
 
-# ========== 点击确认按钮（独立函数，使用 JS 点击） ==========
+# ========== 点击确认按钮 ==========
 def click_confirm_choices(sb):
-    """检测并点击确认按钮（如 'Confirm choices'），使用 JS 点击"""
     confirm_selectors = [
         'button:contains("Confirm choices")',
         'button:contains("Confirm")',
@@ -131,7 +128,6 @@ def click_confirm_choices(sb):
         except Exception as e:
             print(f"⚠️ 选择器 {sel} 失败: {e}")
             continue
-    # 遍历所有按钮
     try:
         buttons = sb.find_elements('button')
         for btn in buttons:
@@ -148,28 +144,20 @@ def click_confirm_choices(sb):
 
 # ========== 最终点击 Order now ==========
 def click_order_now(sb):
-    """
-    等待订单页面加载，并点击 Order now 按钮。
-    如果检测到确认按钮，先点击它。
-    """
     print("⏳ 等待页面加载...")
-    time.sleep(3)  # 初始等待
+    time.sleep(3)
 
-    # 检查当前 URL
     current_url = sb.get_current_url()
     print(f"📄 当前 URL: {current_url}")
 
-    # 如果 URL 不包含 cart_renew，尝试点击确认按钮
     if "cart_renew" not in current_url:
         print("🔍 检测到可能需要在当前页面点击确认按钮")
         if click_confirm_choices(sb):
             print("✅ 点击确认按钮后，等待跳转...")
             time.sleep(5)
-            # 重新获取 URL
             current_url = sb.get_current_url()
             print(f"📄 点击确认后 URL: {current_url}")
 
-    # 无论是否跳转，都等待 #order-submit 出现（最长 20 秒）
     try:
         wait = WebDriverWait(sb.driver, 20)
         element = wait.until(EC.presence_of_element_located((By.CSS_SELECTOR, "#order-submit")))
@@ -182,9 +170,7 @@ def click_order_now(sb):
             return True, ""
     except Exception as e:
         print(f"⚠️ 等待/点击 #order-submit 失败: {e}")
-        # 如果超时，尝试备用策略
 
-    # 备用策略：通过其他选择器
     strategies = [
         ('button:contains("Order now")', '精确文本'),
         ('button:contains("Order")', '包含 Order'),
@@ -208,7 +194,6 @@ def click_order_now(sb):
         except Exception as e:
             continue
 
-    # 遍历所有按钮
     try:
         buttons = sb.find_elements('button')
         for btn in buttons:
@@ -349,7 +334,7 @@ def login(sb, email, password):
             return True, url
     return False, sb.get_current_url()
 
-# ========== 调度：全局唯一任务（只保留一个，到期前20分钟触发） ==========
+# ========== 调度：全局唯一任务 ==========
 def schedule_via_cronjob(trigger_timestamp, gh_token, repo, workflow_id, api_key, branch="main"):
     dt = datetime.fromtimestamp(trigger_timestamp)
     schedule = {
@@ -392,7 +377,6 @@ def schedule_via_cronjob(trigger_timestamp, gh_token, repo, workflow_id, api_key
     print(f"📤 调度触发时间: {dt}")
 
     try:
-        # 1. 获取所有现有任务
         resp = requests.get("https://api.cron-job.org/jobs", headers=headers, timeout=30)
         resp.raise_for_status()
         jobs_data = resp.json()
@@ -401,7 +385,6 @@ def schedule_via_cronjob(trigger_timestamp, gh_token, repo, workflow_id, api_key
 
         matching_jobs = [j for j in jobs if j.get("url") == dispatch_url]
 
-        # 删除多余的匹配任务（只保留第一个）
         for job in matching_jobs[1:]:
             job_id = job.get("jobId")
             if job_id:
@@ -458,9 +441,16 @@ def main():
         f"🕐 当前北京时间: {beijing_time}"
     )
 
-    # 增加超时设置，避免浏览器僵死
+    # 修正：移除 driver_timeout 参数
     with SB(uc=True, headless=False, proxy=PROXY_SERVER or None,
-            page_load_strategy='eager', driver_timeout=120) as sb:
+            page_load_strategy='eager') as sb:
+        # 超时已在 login 中设置，但为确保也可在此处设置
+        try:
+            sb.driver.set_page_load_timeout(120)
+            sb.driver.set_script_timeout(120)
+        except:
+            pass
+
         success, url = login(sb, EMAIL, PASSWORD)
 
         if not success:
@@ -474,7 +464,6 @@ def main():
         sb.sleep(3)
         screenshot_step(sb, "server_list")
 
-        # ---------- 获取到期时间 ----------
         expiry_time_utc_str = get_server_time_info(sb)
         if expiry_time_utc_str:
             expiry_dt = datetime.strptime(expiry_time_utc_str, "%Y-%m-%d %H:%M")
@@ -488,7 +477,6 @@ def main():
 
         url_line = "\nhttps://therose.cloud/"
 
-        # ---------- 续期流程 ----------
         print("📄 开始续期流程...")
         ok, info = click_extend_button(sb)
         if not ok:
@@ -497,7 +485,6 @@ def main():
             send_tg(TG_BOT_TOKEN, TG_CHAT_ID, msg)
             return
 
-        # 点击 Order now（包含中间确认步骤）
         order_ok, order_err = click_order_now(sb)
         if not order_ok:
             msg = f"{base_header}\n\n❌ 点击 Order now 失败: {order_err}{time_info}{url_line}"
@@ -511,7 +498,6 @@ def main():
         renewal_success, renewal_msg = check_renewal_success(sb)
         screenshot_step(sb, "renewal_result")
 
-        # ---------- 续期成功后重新获取到期时间 ----------
         if renewal_success:
             print("✅ 续期成功，重新获取最新到期时间...")
             new_expiry_utc_str = get_server_time_info(sb, refresh=True)
@@ -527,7 +513,6 @@ def main():
         else:
             print("ℹ️ 续期未成功，不重新获取时间")
 
-        # 发送最终通知
         if renewal_success:
             msg = f"{base_header}\n\n✅ 续期成功！{renewal_msg}{time_info}{url_line}"
             print(msg)
@@ -539,7 +524,6 @@ def main():
 
         send_tg(TG_BOT_TOKEN, TG_CHAT_ID, msg)
 
-        # ---------- 调度：只创建一个任务（到期前20分钟） ----------
         should_schedule = (renewal_success or FORCE_SCHEDULE) and expiry_time_utc_str is not None
 
         if should_schedule:
