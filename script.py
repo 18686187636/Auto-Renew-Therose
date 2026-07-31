@@ -70,34 +70,29 @@ def get_current_ip(proxy_server=None):
 def get_beijing_time():
     return (datetime.utcnow() + timedelta(hours=8)).strftime("%Y-%m-%d %H:%M:%S")
 
-# ========== 点击 Extend 按钮（使用 JS 点击） ==========
+# ========== 点击 Extend 按钮（使用 sb.click） ==========
 def click_extend_button(sb):
     selectors = [
         'span:contains("Extend")',
-        'button:contains(title="Extend")',
+        'button[title="Extend"]',
         'button:contains("Extend")',
     ]
     for sel in selectors:
         try:
-            element = sb.find_element(sel, timeout=3)
-            if element:
-                print(f"✅ 找到 Extend 按钮，选择器: {sel}")
-                sb.driver.execute_script("arguments[0].scrollIntoView({block: 'center'});", element)
-                time.sleep(0.5)
-                sb.driver.execute_script("arguments[0].click();", element)
-                print("✅ 点击 Extend 成功")
-                return True, {}
+            # 使用 sb.click 直接点击，它会自动滚动并等待可点击
+            sb.click(sel, timeout=5)
+            print(f"✅ 点击 Extend 成功 (选择器: {sel})")
+            return True, {}
         except Exception as e:
-            print(f"⚠️ 选择器 {sel} 失败: {e}")
+            print(f"⚠️ 选择器 {sel} 点击失败: {e}")
             continue
+    # 遍历所有按钮
     try:
         buttons = sb.find_elements('button')
         for btn in buttons:
             text = btn.text.strip().lower()
             if 'extend' in text:
-                sb.driver.execute_script("arguments[0].scrollIntoView({block: 'center'});", btn)
-                time.sleep(0.5)
-                sb.driver.execute_script("arguments[0].click();", btn)
+                sb.click(btn)
                 print("✅ 通过遍历点击 Extend 成功")
                 return True, {}
     except Exception as e:
@@ -117,25 +112,22 @@ def click_confirm_choices(sb):
     ]
     for sel in confirm_selectors:
         try:
+            # 先检查元素是否存在且可见
             element = sb.find_element(sel, timeout=2)
             if element and element.is_displayed():
-                print(f"✅ 发现确认按钮: {sel}")
-                sb.driver.execute_script("arguments[0].scrollIntoView({block: 'center'});", element)
-                time.sleep(0.5)
-                sb.driver.execute_script("arguments[0].click();", element)
-                print("✅ 点击确认按钮成功")
+                sb.click(sel)
+                print(f"✅ 点击确认按钮成功 (选择器: {sel})")
                 return True
         except Exception as e:
             print(f"⚠️ 选择器 {sel} 失败: {e}")
             continue
+    # 遍历所有按钮
     try:
         buttons = sb.find_elements('button')
         for btn in buttons:
             text = btn.text.strip().lower()
             if 'confirm' in text or 'yes' in text or '确定' in text or '确认' in text:
-                sb.driver.execute_script("arguments[0].scrollIntoView({block: 'center'});", btn)
-                time.sleep(0.5)
-                sb.driver.execute_script("arguments[0].click();", btn)
+                sb.click(btn)
                 print("✅ 通过遍历点击确认按钮成功")
                 return True
     except Exception as e:
@@ -158,52 +150,42 @@ def click_order_now(sb):
             current_url = sb.get_current_url()
             print(f"📄 点击确认后 URL: {current_url}")
 
+    # 优先通过 ID 点击
     try:
-        wait = WebDriverWait(sb.driver, 20)
-        element = wait.until(EC.presence_of_element_located((By.CSS_SELECTOR, "#order-submit")))
-        if element:
-            print("✅ 检测到 Order now 按钮 (ID: #order-submit)")
-            sb.driver.execute_script("arguments[0].scrollIntoView({block: 'center'});", element)
-            time.sleep(0.5)
-            sb.driver.execute_script("arguments[0].click();", element)
-            print("✅ 点击 Order now 成功")
-            return True, ""
+        sb.click('#order-submit', timeout=15)
+        print("✅ 点击 Order now 成功 (ID: #order-submit)")
+        return True, ""
     except Exception as e:
-        print(f"⚠️ 等待/点击 #order-submit 失败: {e}")
+        print(f"⚠️ 通过 ID 点击失败: {e}")
 
+    # 备用策略
     strategies = [
-        ('button:contains("Order now")', '精确文本'),
-        ('button:contains("Order")', '包含 Order'),
-        ('button[type="submit"]', 'type=submit'),
-        ('button:contains("购买")', '中文购买'),
-        ('button:contains("续期")', '续期'),
-        ('a:contains("Order")', 'a 标签'),
-        ('span:contains("Order")', 'span'),
-        ('//*[contains(translate(text(), "ABCDEFGHIJKLMNOPQRSTUVWXYZ", "abcdefghijklmnopqrstuvwxyz"), "order")]', 'XPath'),
+        'button:contains("Order now")',
+        'button:contains("Order")',
+        'button[type="submit"]',
+        'button:contains("购买")',
+        'button:contains("续期")',
+        'a:contains("Order")',
+        'span:contains("Order")',
+        # XPath 不区分大小写
+        '//*[contains(translate(text(), "ABCDEFGHIJKLMNOPQRSTUVWXYZ", "abcdefghijklmnopqrstuvwxyz"), "order")]',
     ]
-    for selector, desc in strategies:
+    for sel in strategies:
         try:
-            element = sb.find_element(selector, timeout=2)
-            if element:
-                print(f"🛒 备用策略 '{desc}' 找到元素，选择器: {selector}")
-                sb.driver.execute_script("arguments[0].scrollIntoView({block: 'center'});", element)
-                time.sleep(0.5)
-                sb.driver.execute_script("arguments[0].click();", element)
-                print("✅ 点击成功 (备用策略)")
-                return True, ""
+            sb.click(sel, timeout=2)
+            print(f"✅ 点击成功 (备用策略: {sel})")
+            return True, ""
         except Exception as e:
             continue
 
+    # 遍历所有按钮
     try:
         buttons = sb.find_elements('button')
         for btn in buttons:
             text = btn.text.strip().lower()
             if any(kw in text for kw in ['order', 'renew', 'confirm', 'purchase', 'buy', '立即购买', '续期']):
-                print(f"🛒 通过遍历按钮找到: {text[:30]}")
-                sb.driver.execute_script("arguments[0].scrollIntoView({block: 'center'});", btn)
-                time.sleep(0.5)
-                sb.driver.execute_script("arguments[0].click();", btn)
-                print("✅ 点击成功 (遍历按钮)")
+                sb.click(btn)
+                print(f"✅ 点击成功 (遍历按钮: {text[:30]})")
                 return True, ""
     except Exception as e:
         print(f"⚠️ 遍历按钮失败: {e}")
@@ -441,10 +423,8 @@ def main():
         f"🕐 当前北京时间: {beijing_time}"
     )
 
-    # 修正：移除 driver_timeout 参数
     with SB(uc=True, headless=False, proxy=PROXY_SERVER or None,
             page_load_strategy='eager') as sb:
-        # 超时已在 login 中设置，但为确保也可在此处设置
         try:
             sb.driver.set_page_load_timeout(120)
             sb.driver.set_script_timeout(120)
