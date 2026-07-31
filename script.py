@@ -87,22 +87,28 @@ def click_extend_button(sb):
     except Exception as e:
         return False, {"error": str(e)}
 
-# ========== 增强版 Order now 点击（带 ID 优先） ==========
+# ========== 增强版 Order now 点击（处理页面跳转） ==========
 def click_order_now(sb):
     """
-    点击 Order now 按钮，优先使用 ID 选择器 #order-submit
+    点击 Order now 按钮，支持新页面加载或模态框两种情况。
     """
-    # 等待弹窗完全出现（额外延时）
-    print("⏳ 等待续期弹窗出现...")
-    time.sleep(5)  # 固定等待，确保模态框可见
+    print("⏳ 等待页面或弹窗加载...")
+    # 先等待 3 秒让页面开始跳转
+    time.sleep(3)
 
-    # ===== 首选策略：通过 ID 精准定位 =====
+    # 检查 URL 是否变化（可能跳转到新的订单页）
+    current_url = sb.get_current_url()
+    print(f"📄 当前 URL: {current_url}")
+
+    # 如果 URL 包含 "panel" 或 "servers"，可能还在列表页，检查是否有模态框
+    # 但也可能是同页刷新，我们统一等待目标元素
+
+    # 策略1：通过 ID 定位（优先）
     try:
         sb.wait_for_element('#order-submit', timeout=15)
         print("✅ 检测到 Order now 按钮 (ID: #order-submit)")
         btn = sb.find_element('#order-submit', timeout=3)
         if btn:
-            # 滚动到视图并点击
             sb.driver.execute_script("arguments[0].scrollIntoView({block: 'center'});", btn)
             time.sleep(0.5)
             sb.uc_click('#order-submit')
@@ -111,7 +117,7 @@ def click_order_now(sb):
     except Exception as e:
         print(f"⚠️ 通过 ID 点击失败: {e}")
 
-    # ===== 备用策略（兼容其他可能的选择器） =====
+    # 策略2：备用选择器（适用于新页面或弹窗）
     strategies = [
         ('button:contains("Order now")', '精确文本'),
         ('button:contains("Order")', '包含 Order'),
@@ -136,20 +142,20 @@ def click_order_now(sb):
         except Exception as e:
             continue
 
-    # ===== 最后尝试：遍历所有元素，查找包含关键词的可见元素 =====
+    # 策略3：遍历所有按钮（仅限 button 标签）
     try:
-        elements = sb.find_elements('*')
-        for el in elements:
-            text = el.text.strip().lower()
-            if 'order now' in text or 'order' in text or 'renew' in text:
-                print(f"🛒 通过遍历找到元素: {el.tag_name} - {el.text[:30]}")
-                sb.driver.execute_script("arguments[0].scrollIntoView({block: 'center'});", el)
+        buttons = sb.find_elements('button')
+        for btn in buttons:
+            text = btn.text.strip().lower()
+            if any(kw in text for kw in ['order', 'renew', 'confirm', 'purchase', 'buy', '立即购买', '续期']):
+                print(f"🛒 通过遍历按钮找到: {text[:30]}")
+                sb.driver.execute_script("arguments[0].scrollIntoView({block: 'center'});", btn)
                 time.sleep(0.5)
-                sb.driver.execute_script("arguments[0].click();", el)
-                print("✅ 点击成功 (遍历方式)")
+                sb.driver.execute_script("arguments[0].click();", btn)
+                print("✅ 点击成功 (遍历按钮)")
                 return True, ""
     except Exception as e:
-        print(f"⚠️ 遍历元素失败: {e}")
+        print(f"⚠️ 遍历按钮失败: {e}")
 
     return False, "未找到任何可点击的 Order/Renew/购买 按钮"
 
@@ -424,7 +430,7 @@ def main():
             send_tg(TG_BOT_TOKEN, TG_CHAT_ID, msg)
             return
 
-        # 点击 Order now（增强版函数）
+        # 点击 Order now（新函数已适配页面跳转）
         order_ok, order_err = click_order_now(sb)
         if not order_ok:
             msg = f"{base_header}\n\n❌ 点击 Order now 失败: {order_err}{time_info}{url_line}"
