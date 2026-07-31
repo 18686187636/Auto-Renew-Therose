@@ -372,7 +372,7 @@ def main():
         screenshot_step(sb, "extend_clicked")
 
         try:
-            button = sb.find_element('button:contains("Order now")', timeout=5)
+            button = sb.find_element('button:contains("Order now")', timeout=10)
             if button:
                 print("🛒 点击 Order now 按钮...")
                 sb.uc_click('button:contains("Order now")')
