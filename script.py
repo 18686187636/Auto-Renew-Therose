@@ -7,6 +7,9 @@ import requests
 import json
 from datetime import datetime, timedelta
 from seleniumbase import SB
+from selenium.webdriver.common.by import By
+from selenium.webdriver.support.ui import WebDriverWait
+from selenium.webdriver.support import expected_conditions as EC
 
 # ========== 环境变量 ==========
 EMAIL = os.environ.get("EMAIL") or ""
@@ -76,20 +79,34 @@ def click_extend_button(sb):
     except Exception as e:
         return False, {"error": str(e)}
 
-# ========== 点击 Order now（去掉 ID 尝试，仅使用 button:contains 并增加延时） ==========
+# ========== 点击 Order now（增加延时5秒） ==========
 def click_order_now(sb):
-    # 增加固定延时 5 秒，确保页面稳定
+    # 增加固定延时 5 秒，确保页面稳定，减少连接错误
     time.sleep(5)
 
-    # 首选：button:contains("Order now")
+    # 首先等待 #order-submit（最长 20 秒）
     try:
-        sb.click('button:contains("Order now")', timeout=10)
+        wait = WebDriverWait(sb.driver, 20)
+        element = wait.until(EC.presence_of_element_located((By.CSS_SELECTOR, "#order-submit")))
+        if element is not None:
+            print("✅ 找到 Order now 按钮 (ID: #order-submit)")
+            sb.driver.execute_script("arguments[0].scrollIntoView({block: 'center'});", element)
+            time.sleep(0.5)
+            sb.driver.execute_script("arguments[0].click();", element)
+            print("✅ 点击 Order now 成功 (ID)")
+            return True, ""
+    except Exception as e:
+        print(f"⚠️ 通过 ID 点击失败: {e}")
+
+    # 备选：button:contains("Order now")
+    try:
+        sb.click('button:contains("Order now")', timeout=5)
         print("✅ 点击 Order now 成功 (button:contains)")
         return True, ""
     except Exception as e:
         print(f"⚠️ button:contains 失败: {e}")
 
-    # 备选：遍历所有按钮
+    # 最后遍历所有按钮
     try:
         buttons = sb.find_elements('button')
         for btn in buttons:
