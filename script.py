@@ -1,6 +1,9 @@
 #!/usr/bin/env python3
 
-import os, re, sys, time, requests
+import os
+import sys
+import time
+import requests
 import json
 from datetime import datetime, timedelta
 from seleniumbase import SB
@@ -25,7 +28,7 @@ if not EMAIL or not PASSWORD:
     print("❌ 请设置环境变量 EMAIL 和 PASSWORD")
     sys.exit(1)
 
-# ========== 辅助函数（不变） ==========
+# ========== 辅助函数 ==========
 def screenshot_step(sb, step_name):
     timestamp = int(time.time() * 1000)
     filename = f"step_{step_name}_{timestamp}.png"
@@ -61,7 +64,7 @@ def get_current_ip(proxy_server=None):
 def get_beijing_time():
     return (datetime.utcnow() + timedelta(hours=8)).strftime("%Y-%m-%d %H:%M:%S")
 
-# ========== 续期按钮点击（不变） ==========
+# ========== 续期按钮点击 ==========
 def click_extend_button(sb):
     selectors = [
         'span:contains("Extend")',
@@ -84,45 +87,71 @@ def click_extend_button(sb):
     except Exception as e:
         return False, {"error": str(e)}
 
-# ========== 新增：稳健点击 Order now ==========
+# ========== 增强版 Order now 点击（带 ID 优先） ==========
 def click_order_now(sb):
-    try:
-        sb.wait_for_element('button:contains("Order")', timeout=10)
-        print("✅ 弹窗已加载，准备点击 Order 按钮")
-    except Exception as e:
-        return False, f"弹窗加载超时: {e}"
+    """
+    点击 Order now 按钮，优先使用 ID 选择器 #order-submit
+    """
+    # 等待弹窗完全出现（额外延时）
+    print("⏳ 等待续期弹窗出现...")
+    time.sleep(5)  # 固定等待，确保模态框可见
 
+    # ===== 首选策略：通过 ID 精准定位 =====
+    try:
+        sb.wait_for_element('#order-submit', timeout=15)
+        print("✅ 检测到 Order now 按钮 (ID: #order-submit)")
+        btn = sb.find_element('#order-submit', timeout=3)
+        if btn:
+            # 滚动到视图并点击
+            sb.driver.execute_script("arguments[0].scrollIntoView({block: 'center'});", btn)
+            time.sleep(0.5)
+            sb.uc_click('#order-submit')
+            print("✅ 点击 Order now 成功 (ID 方式)")
+            return True, ""
+    except Exception as e:
+        print(f"⚠️ 通过 ID 点击失败: {e}")
+
+    # ===== 备用策略（兼容其他可能的选择器） =====
     strategies = [
         ('button:contains("Order now")', '精确文本'),
         ('button:contains("Order")', '包含 Order'),
-        ('button:contains("order")', '小写 order'),
-        ('button:contains("立即购买")', '中文'),
-        ('button[class*="order"]', 'class 包含 order'),
-        ('button[class*="btn-primary"]:contains("Order")', '主按钮'),
+        ('button[type="submit"]', 'type=submit'),
+        ('button:contains("购买")', '中文购买'),
+        ('button:contains("续期")', '续期'),
+        ('a:contains("Order")', 'a 标签'),
+        ('span:contains("Order")', 'span'),
+        ('//*[contains(translate(text(), "ABCDEFGHIJKLMNOPQRSTUVWXYZ", "abcdefghijklmnopqrstuvwxyz"), "order")]', 'XPath 不区分大小写'),
     ]
 
     for selector, desc in strategies:
         try:
-            btn = sb.find_element(selector, timeout=3)
-            if btn:
-                print(f"🛒 尝试点击 '{desc}' 选择器: {selector}")
-                sb.driver.execute_script("arguments[0].scrollIntoView({block: 'center'});", btn)
+            element = sb.find_element(selector, timeout=2)
+            if element:
+                print(f"🛒 备用策略 '{desc}' 成功，选择器: {selector}")
+                sb.driver.execute_script("arguments[0].scrollIntoView({block: 'center'});", element)
                 time.sleep(0.5)
                 sb.uc_click(selector)
-                print(f"✅ 成功点击 Order 按钮")
+                print("✅ 点击成功 (备用策略)")
                 return True, ""
         except Exception as e:
-            print(f"⚠️ 策略 '{desc}' 失败: {e}")
+            continue
 
+    # ===== 最后尝试：遍历所有元素，查找包含关键词的可见元素 =====
     try:
-        btn = sb.find_element('button:contains("Order")', timeout=2)
-        if btn:
-            sb.driver.execute_script("arguments[0].click();", btn)
-            print("✅ 通过 JavaScript 强制点击成功")
-            return True, ""
+        elements = sb.find_elements('*')
+        for el in elements:
+            text = el.text.strip().lower()
+            if 'order now' in text or 'order' in text or 'renew' in text:
+                print(f"🛒 通过遍历找到元素: {el.tag_name} - {el.text[:30]}")
+                sb.driver.execute_script("arguments[0].scrollIntoView({block: 'center'});", el)
+                time.sleep(0.5)
+                sb.driver.execute_script("arguments[0].click();", el)
+                print("✅ 点击成功 (遍历方式)")
+                return True, ""
     except Exception as e:
-        return False, f"所有点击策略均失败: {e}"
-    return False, "未找到任何可点击的 Order 按钮"
+        print(f"⚠️ 遍历元素失败: {e}")
+
+    return False, "未找到任何可点击的 Order/Renew/购买 按钮"
 
 # ========== 检查续期结果 ==========
 def check_renewal_success(sb):
@@ -175,7 +204,7 @@ def get_server_time_info(sb, refresh=False):
         print(f"⚠️ 获取服务器时间信息失败: {e}")
     return None
 
-# ========== 登录相关（不变） ==========
+# ========== 登录相关 ==========
 def perform_login_attempt(sb, email, password, attempt_number):
     print(f"\n🔄 登录尝试 {attempt_number}/2")
     print("🌐 打开登录页面...")
@@ -248,7 +277,7 @@ def login(sb, email, password):
             return True, url
     return False, sb.get_current_url()
 
-# ========== 调度：全局唯一任务（只保留一个） ==========
+# ========== 调度：全局唯一任务（只保留一个，到期前20分钟触发） ==========
 def schedule_via_cronjob(trigger_timestamp, gh_token, repo, workflow_id, api_key, branch="main"):
     dt = datetime.fromtimestamp(trigger_timestamp)
     schedule = {
@@ -395,11 +424,7 @@ def main():
             send_tg(TG_BOT_TOKEN, TG_CHAT_ID, msg)
             return
 
-        # 等待弹窗出现
-        time.sleep(3)
-        screenshot_step(sb, "extend_clicked")
-
-        # 点击 Order now（使用新函数）
+        # 点击 Order now（增强版函数）
         order_ok, order_err = click_order_now(sb)
         if not order_ok:
             msg = f"{base_header}\n\n❌ 点击 Order now 失败: {order_err}{time_info}{url_line}"
