@@ -87,28 +87,33 @@ def click_extend_button(sb):
     except Exception as e:
         return False, {"error": str(e)}
 
-# ========== 增强版 Order now 点击（修复序列化问题） ==========
+# ========== 修正版 Order now 点击 ==========
 def click_order_now(sb):
     print("⏳ 等待页面加载...")
-    time.sleep(3)  # 等待新页面加载
+    time.sleep(3)
+
     current_url = sb.get_current_url()
     print(f"📄 当前 URL: {current_url}")
 
-    # 策略1：通过 ID 定位
+    # ----- 策略1：通过 ID 精准点击 -----
     try:
-        btn = sb.find_element('#order-submit', timeout=15)
-        if btn:
-            print("✅ 检测到 Order now 按钮 (ID: #order-submit)")
-            sb.driver.execute_script("arguments[0].scrollIntoView({block: 'center'});", btn)
-            time.sleep(0.5)
-            # 使用 JS 点击，避免 uc_click 的序列化问题
+        sb.wait_for_element('#order-submit', timeout=15)
+        print("✅ 检测到 Order now 按钮 (ID: #order-submit)")
+        # 使用 SeleniumBase 的 click 方法（稳定）
+        try:
+            sb.click('#order-submit')
+            print("✅ 点击 Order now 成功 (click 方式)")
+            return True, ""
+        except:
+            # 如果 click 失败，回退到 JS 点击
+            btn = sb.find_element('#order-submit')
             sb.driver.execute_script("arguments[0].click();", btn)
-            print("✅ 点击 Order now 成功 (ID 方式)")
+            print("✅ 点击 Order now 成功 (JS 方式)")
             return True, ""
     except Exception as e:
         print(f"⚠️ 通过 ID 点击失败: {e}")
 
-    # 策略2：备用选择器
+    # ----- 策略2：备用选择器（点击后立即返回） -----
     strategies = [
         ('button:contains("Order now")', '精确文本'),
         ('button:contains("Order")', '包含 Order'),
@@ -124,7 +129,7 @@ def click_order_now(sb):
         try:
             element = sb.find_element(selector, timeout=2)
             if element:
-                print(f"🛒 备用策略 '{desc}' 成功，选择器: {selector}")
+                print(f"🛒 备用策略 '{desc}' 找到元素，选择器: {selector}")
                 sb.driver.execute_script("arguments[0].scrollIntoView({block: 'center'});", element)
                 time.sleep(0.5)
                 sb.driver.execute_script("arguments[0].click();", element)
@@ -133,7 +138,7 @@ def click_order_now(sb):
         except Exception as e:
             continue
 
-    # 策略3：遍历所有按钮
+    # ----- 策略3：遍历所有按钮（最终兜底） -----
     try:
         buttons = sb.find_elements('button')
         for btn in buttons:
@@ -421,7 +426,7 @@ def main():
             send_tg(TG_BOT_TOKEN, TG_CHAT_ID, msg)
             return
 
-        # 点击 Order now（新函数已修复）
+        # 点击 Order now（修正版）
         order_ok, order_err = click_order_now(sb)
         if not order_ok:
             msg = f"{base_header}\n\n❌ 点击 Order now 失败: {order_err}{time_info}{url_line}"
