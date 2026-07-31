@@ -7,9 +7,6 @@ import requests
 import json
 from datetime import datetime, timedelta
 from seleniumbase import SB
-from selenium.webdriver.common.by import By
-from selenium.webdriver.support.ui import WebDriverWait
-from selenium.webdriver.support import expected_conditions as EC
 
 # ========== 环境变量 ==========
 EMAIL = os.environ.get("EMAIL") or ""
@@ -70,7 +67,7 @@ def get_current_ip(proxy_server=None):
 def get_beijing_time():
     return (datetime.utcnow() + timedelta(hours=8)).strftime("%Y-%m-%d %H:%M:%S")
 
-# ========== 点击 Extend 按钮（使用 #73 成功的 span:contains） ==========
+# ========== 点击 Extend 按钮 ==========
 def click_extend_button(sb):
     try:
         sb.click('span:contains("Extend")', timeout=3)
@@ -79,31 +76,20 @@ def click_extend_button(sb):
     except Exception as e:
         return False, {"error": str(e)}
 
-# ========== 点击 Order now（优先 ID，然后 button:contains） ==========
+# ========== 点击 Order now（去掉 ID 尝试，仅使用 button:contains 并增加延时） ==========
 def click_order_now(sb):
-    # 首先等待 #order-submit（最长 20 秒）
-    try:
-        wait = WebDriverWait(sb.driver, 20)
-        element = wait.until(EC.presence_of_element_located((By.CSS_SELECTOR, "#order-submit")))
-        if element is not None:
-            print("✅ 找到 Order now 按钮 (ID: #order-submit)")
-            sb.driver.execute_script("arguments[0].scrollIntoView({block: 'center'});", element)
-            time.sleep(0.5)
-            sb.driver.execute_script("arguments[0].click();", element)
-            print("✅ 点击 Order now 成功 (ID)")
-            return True, ""
-    except Exception as e:
-        print(f"⚠️ 通过 ID 点击失败: {e}")
+    # 增加固定延时 5 秒，确保页面稳定
+    time.sleep(5)
 
-    # 备选：button:contains("Order now")
+    # 首选：button:contains("Order now")
     try:
-        sb.click('button:contains("Order now")', timeout=5)
+        sb.click('button:contains("Order now")', timeout=10)
         print("✅ 点击 Order now 成功 (button:contains)")
         return True, ""
     except Exception as e:
         print(f"⚠️ button:contains 失败: {e}")
 
-    # 最后遍历所有按钮
+    # 备选：遍历所有按钮
     try:
         buttons = sb.find_elements('button')
         for btn in buttons:
@@ -165,7 +151,7 @@ def get_server_time_info(sb, refresh=False):
         print(f"⚠️ 获取服务器时间信息失败: {e}")
     return None
 
-# ========== 登录相关（同 #73） ==========
+# ========== 登录相关 ==========
 def perform_login_attempt(sb, email, password, attempt_number):
     print(f"\n🔄 登录尝试 {attempt_number}/2")
     print("🌐 打开登录页面...")
