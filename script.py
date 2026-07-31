@@ -35,8 +35,11 @@ if not EMAIL or not PASSWORD:
 def screenshot_step(sb, step_name):
     timestamp = int(time.time() * 1000)
     filename = f"step_{step_name}_{timestamp}.png"
-    sb.save_screenshot(filename)
-    print(f"📸 截图已保存: {filename}")
+    try:
+        sb.save_screenshot(filename)
+        print(f"📸 截图已保存: {filename}")
+    except Exception as e:
+        print(f"⚠️ 截图失败: {e}")
 
 def send_tg(token, chat_id, message):
     if not token or not chat_id:
@@ -67,7 +70,7 @@ def get_current_ip(proxy_server=None):
 def get_beijing_time():
     return (datetime.utcnow() + timedelta(hours=8)).strftime("%Y-%m-%d %H:%M:%S")
 
-# ========== 点击 Extend 按钮（使用原生点击） ==========
+# ========== 点击 Extend 按钮（使用 JS 点击） ==========
 def click_extend_button(sb):
     selectors = [
         'span:contains("Extend")',
@@ -76,27 +79,36 @@ def click_extend_button(sb):
     ]
     for sel in selectors:
         try:
-            element = sb.find_element(sel, timeout=2)
+            element = sb.find_element(sel, timeout=3)
             if element:
-                print(f"✅ 找到按钮，选择器: {sel}")
-                # 使用原生点击
-                sb.click(sel)  # SeleniumBase click
-                print("✅ 点击成功")
+                print(f"✅ 找到 Extend 按钮，选择器: {sel}")
+                # 使用 JS 点击，避免任何复杂交互
+                sb.driver.execute_script("arguments[0].scrollIntoView({block: 'center'});", element)
+                time.sleep(0.5)
+                sb.driver.execute_script("arguments[0].click();", element)
+                print("✅ 点击 Extend 成功")
                 return True, {}
-        except:
+        except Exception as e:
+            print(f"⚠️ 选择器 {sel} 失败: {e}")
             continue
-    # 最后尝试 JS 点击
+    # 最后尝试遍历所有按钮
     try:
-        btn = sb.find_element('button:contains("Extend")', timeout=2)
-        sb.driver.execute_script("arguments[0].click();", btn)
-        print("✅ 通过 JavaScript 点击成功")
-        return True, {}
+        buttons = sb.find_elements('button')
+        for btn in buttons:
+            text = btn.text.strip().lower()
+            if 'extend' in text:
+                sb.driver.execute_script("arguments[0].scrollIntoView({block: 'center'});", btn)
+                time.sleep(0.5)
+                sb.driver.execute_script("arguments[0].click();", btn)
+                print("✅ 通过遍历点击 Extend 成功")
+                return True, {}
     except Exception as e:
         return False, {"error": str(e)}
+    return False, {"error": "未找到 Extend 按钮"}
 
-# ========== 点击确认按钮（中间步骤） ==========
+# ========== 点击确认按钮（独立函数，使用 JS 点击） ==========
 def click_confirm_choices(sb):
-    """检测并点击确认按钮（如 'Confirm choices'）"""
+    """检测并点击确认按钮（如 'Confirm choices'），使用 JS 点击"""
     confirm_selectors = [
         'button:contains("Confirm choices")',
         'button:contains("Confirm")',
@@ -108,56 +120,71 @@ def click_confirm_choices(sb):
     ]
     for sel in confirm_selectors:
         try:
-            element = sb.find_element(sel, timeout=3)
+            element = sb.find_element(sel, timeout=2)
             if element and element.is_displayed():
                 print(f"✅ 发现确认按钮: {sel}")
-                sb.click(sel)
+                sb.driver.execute_script("arguments[0].scrollIntoView({block: 'center'});", element)
+                time.sleep(0.5)
+                sb.driver.execute_script("arguments[0].click();", element)
                 print("✅ 点击确认按钮成功")
-                time.sleep(2)
                 return True
-        except:
+        except Exception as e:
+            print(f"⚠️ 选择器 {sel} 失败: {e}")
             continue
+    # 遍历所有按钮
+    try:
+        buttons = sb.find_elements('button')
+        for btn in buttons:
+            text = btn.text.strip().lower()
+            if 'confirm' in text or 'yes' in text or '确定' in text or '确认' in text:
+                sb.driver.execute_script("arguments[0].scrollIntoView({block: 'center'});", btn)
+                time.sleep(0.5)
+                sb.driver.execute_script("arguments[0].click();", btn)
+                print("✅ 通过遍历点击确认按钮成功")
+                return True
+    except Exception as e:
+        print(f"⚠️ 遍历确认按钮失败: {e}")
     return False
 
-# ========== 最终点击 Order now（完全使用原生/JS点击） ==========
+# ========== 最终点击 Order now ==========
 def click_order_now(sb):
     """
-    等待订单页面加载，并点击 Order now 按钮（#order-submit）。
-    支持中间确认按钮检测。
+    等待订单页面加载，并点击 Order now 按钮。
+    如果检测到确认按钮，先点击它。
     """
-    print("⏳ 等待订单页面加载...")
-    time.sleep(3)
+    print("⏳ 等待页面加载...")
+    time.sleep(3)  # 初始等待
 
+    # 检查当前 URL
     current_url = sb.get_current_url()
     print(f"📄 当前 URL: {current_url}")
 
-    # 如果 URL 没有变成 cart_renew，可能还需要点击确认
+    # 如果 URL 不包含 cart_renew，尝试点击确认按钮
     if "cart_renew" not in current_url:
-        print("🔍 检测到可能需要在原页面点击确认按钮")
+        print("🔍 检测到可能需要在当前页面点击确认按钮")
         if click_confirm_choices(sb):
-            # 点击确认后等待跳转
-            time.sleep(3)
+            print("✅ 点击确认按钮后，等待跳转...")
+            time.sleep(5)
+            # 重新获取 URL
             current_url = sb.get_current_url()
             print(f"📄 点击确认后 URL: {current_url}")
 
-    # 策略1：通过 ID #order-submit（最可靠）
+    # 无论是否跳转，都等待 #order-submit 出现（最长 20 秒）
     try:
-        # 等待元素出现（最长 20 秒）
         wait = WebDriverWait(sb.driver, 20)
         element = wait.until(EC.presence_of_element_located((By.CSS_SELECTOR, "#order-submit")))
         if element:
             print("✅ 检测到 Order now 按钮 (ID: #order-submit)")
-            # 滚动到视图
             sb.driver.execute_script("arguments[0].scrollIntoView({block: 'center'});", element)
             time.sleep(0.5)
-            # 使用 SeleniumBase click
-            sb.click("#order-submit")
-            print("✅ 点击 Order now 成功 (click 方式)")
+            sb.driver.execute_script("arguments[0].click();", element)
+            print("✅ 点击 Order now 成功")
             return True, ""
     except Exception as e:
-        print(f"⚠️ 通过 ID 点击失败: {e}")
+        print(f"⚠️ 等待/点击 #order-submit 失败: {e}")
+        # 如果超时，尝试备用策略
 
-    # 策略2：通过其他选择器
+    # 备用策略：通过其他选择器
     strategies = [
         ('button:contains("Order now")', '精确文本'),
         ('button:contains("Order")', '包含 Order'),
@@ -181,7 +208,7 @@ def click_order_now(sb):
         except Exception as e:
             continue
 
-    # 策略3：遍历按钮（最后兜底）
+    # 遍历所有按钮
     try:
         buttons = sb.find_elements('button')
         for btn in buttons:
@@ -283,7 +310,7 @@ def perform_login_attempt(sb, email, password, attempt_number):
     screenshot_step(sb, f"attempt_{attempt_number}_after_6s_wait")
 
     print("🔑 点击登录按钮...")
-    sb.uc_click('button:contains("Sign in")')  # 登录按钮使用 uc_click 可以，因为这不是导致问题的根源
+    sb.uc_click('button:contains("Sign in")')
     screenshot_step(sb, f"attempt_{attempt_number}_login_clicked")
     sb.sleep(5)
 
@@ -311,8 +338,8 @@ def perform_login_attempt(sb, email, password, attempt_number):
 
 def login(sb, email, password):
     try:
-        sb.driver.set_page_load_timeout(60)
-        sb.driver.set_script_timeout(60)
+        sb.driver.set_page_load_timeout(120)
+        sb.driver.set_script_timeout(120)
     except Exception as e:
         print(f"⚠️ 设置超时失败: {e}")
 
@@ -431,8 +458,9 @@ def main():
         f"🕐 当前北京时间: {beijing_time}"
     )
 
+    # 增加超时设置，避免浏览器僵死
     with SB(uc=True, headless=False, proxy=PROXY_SERVER or None,
-            page_load_strategy='eager') as sb:
+            page_load_strategy='eager', driver_timeout=120) as sb:
         success, url = login(sb, EMAIL, PASSWORD)
 
         if not success:
