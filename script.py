@@ -7,6 +7,9 @@ import requests
 import json
 from datetime import datetime, timedelta
 from seleniumbase import SB
+from selenium.webdriver.common.by import By
+from selenium.webdriver.support.ui import WebDriverWait
+from selenium.webdriver.support import expected_conditions as EC
 
 # ========== 环境变量 ==========
 EMAIL = os.environ.get("EMAIL") or ""
@@ -64,21 +67,25 @@ def get_current_ip(proxy_server=None):
 def get_beijing_time():
     return (datetime.utcnow() + timedelta(hours=8)).strftime("%Y-%m-%d %H:%M:%S")
 
-# ========== 续期按钮点击 ==========
+# ========== 点击 Extend 按钮（使用原生点击） ==========
 def click_extend_button(sb):
     selectors = [
         'span:contains("Extend")',
         'button:contains(title="Extend")',
+        'button:contains("Extend")',
     ]
     for sel in selectors:
         try:
-            if sb.find_element(sel, timeout=2):
+            element = sb.find_element(sel, timeout=2)
+            if element:
                 print(f"✅ 找到按钮，选择器: {sel}")
-                sb.uc_click(sel, timeout=5)
+                # 使用原生点击
+                sb.click(sel)  # SeleniumBase click
                 print("✅ 点击成功")
                 return True, {}
         except:
             continue
+    # 最后尝试 JS 点击
     try:
         btn = sb.find_element('button:contains("Extend")', timeout=2)
         sb.driver.execute_script("arguments[0].click();", btn)
@@ -87,33 +94,70 @@ def click_extend_button(sb):
     except Exception as e:
         return False, {"error": str(e)}
 
-# ========== 修正版 Order now 点击 ==========
+# ========== 点击确认按钮（中间步骤） ==========
+def click_confirm_choices(sb):
+    """检测并点击确认按钮（如 'Confirm choices'）"""
+    confirm_selectors = [
+        'button:contains("Confirm choices")',
+        'button:contains("Confirm")',
+        'button:contains("Yes")',
+        'button:contains("确定")',
+        'button:contains("确认")',
+        'button[type="submit"]:contains("Confirm")',
+        'button[class*="confirm"]',
+    ]
+    for sel in confirm_selectors:
+        try:
+            element = sb.find_element(sel, timeout=3)
+            if element and element.is_displayed():
+                print(f"✅ 发现确认按钮: {sel}")
+                sb.click(sel)
+                print("✅ 点击确认按钮成功")
+                time.sleep(2)
+                return True
+        except:
+            continue
+    return False
+
+# ========== 最终点击 Order now（完全使用原生/JS点击） ==========
 def click_order_now(sb):
-    print("⏳ 等待页面加载...")
+    """
+    等待订单页面加载，并点击 Order now 按钮（#order-submit）。
+    支持中间确认按钮检测。
+    """
+    print("⏳ 等待订单页面加载...")
     time.sleep(3)
 
     current_url = sb.get_current_url()
     print(f"📄 当前 URL: {current_url}")
 
-    # ----- 策略1：通过 ID 精准点击 -----
+    # 如果 URL 没有变成 cart_renew，可能还需要点击确认
+    if "cart_renew" not in current_url:
+        print("🔍 检测到可能需要在原页面点击确认按钮")
+        if click_confirm_choices(sb):
+            # 点击确认后等待跳转
+            time.sleep(3)
+            current_url = sb.get_current_url()
+            print(f"📄 点击确认后 URL: {current_url}")
+
+    # 策略1：通过 ID #order-submit（最可靠）
     try:
-        sb.wait_for_element('#order-submit', timeout=15)
-        print("✅ 检测到 Order now 按钮 (ID: #order-submit)")
-        # 使用 SeleniumBase 的 click 方法（稳定）
-        try:
-            sb.click('#order-submit')
+        # 等待元素出现（最长 20 秒）
+        wait = WebDriverWait(sb.driver, 20)
+        element = wait.until(EC.presence_of_element_located((By.CSS_SELECTOR, "#order-submit")))
+        if element:
+            print("✅ 检测到 Order now 按钮 (ID: #order-submit)")
+            # 滚动到视图
+            sb.driver.execute_script("arguments[0].scrollIntoView({block: 'center'});", element)
+            time.sleep(0.5)
+            # 使用 SeleniumBase click
+            sb.click("#order-submit")
             print("✅ 点击 Order now 成功 (click 方式)")
-            return True, ""
-        except:
-            # 如果 click 失败，回退到 JS 点击
-            btn = sb.find_element('#order-submit')
-            sb.driver.execute_script("arguments[0].click();", btn)
-            print("✅ 点击 Order now 成功 (JS 方式)")
             return True, ""
     except Exception as e:
         print(f"⚠️ 通过 ID 点击失败: {e}")
 
-    # ----- 策略2：备用选择器（点击后立即返回） -----
+    # 策略2：通过其他选择器
     strategies = [
         ('button:contains("Order now")', '精确文本'),
         ('button:contains("Order")', '包含 Order'),
@@ -124,7 +168,6 @@ def click_order_now(sb):
         ('span:contains("Order")', 'span'),
         ('//*[contains(translate(text(), "ABCDEFGHIJKLMNOPQRSTUVWXYZ", "abcdefghijklmnopqrstuvwxyz"), "order")]', 'XPath'),
     ]
-
     for selector, desc in strategies:
         try:
             element = sb.find_element(selector, timeout=2)
@@ -138,7 +181,7 @@ def click_order_now(sb):
         except Exception as e:
             continue
 
-    # ----- 策略3：遍历所有按钮（最终兜底） -----
+    # 策略3：遍历按钮（最后兜底）
     try:
         buttons = sb.find_elements('button')
         for btn in buttons:
@@ -240,7 +283,7 @@ def perform_login_attempt(sb, email, password, attempt_number):
     screenshot_step(sb, f"attempt_{attempt_number}_after_6s_wait")
 
     print("🔑 点击登录按钮...")
-    sb.uc_click('button:contains("Sign in")')
+    sb.uc_click('button:contains("Sign in")')  # 登录按钮使用 uc_click 可以，因为这不是导致问题的根源
     screenshot_step(sb, f"attempt_{attempt_number}_login_clicked")
     sb.sleep(5)
 
@@ -426,7 +469,7 @@ def main():
             send_tg(TG_BOT_TOKEN, TG_CHAT_ID, msg)
             return
 
-        # 点击 Order now（修正版）
+        # 点击 Order now（包含中间确认步骤）
         order_ok, order_err = click_order_now(sb)
         if not order_ok:
             msg = f"{base_header}\n\n❌ 点击 Order now 失败: {order_err}{time_info}{url_line}"
