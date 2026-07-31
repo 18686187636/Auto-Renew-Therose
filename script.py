@@ -25,7 +25,7 @@ if not EMAIL or not PASSWORD:
     print("❌ 请设置环境变量 EMAIL 和 PASSWORD")
     sys.exit(1)
 
-# ========== 辅助函数 ==========
+# ========== 辅助函数（不变） ==========
 def screenshot_step(sb, step_name):
     timestamp = int(time.time() * 1000)
     filename = f"step_{step_name}_{timestamp}.png"
@@ -61,7 +61,7 @@ def get_current_ip(proxy_server=None):
 def get_beijing_time():
     return (datetime.utcnow() + timedelta(hours=8)).strftime("%Y-%m-%d %H:%M:%S")
 
-# ========== 续期按钮点击（增强版） ==========
+# ========== 续期按钮点击（不变） ==========
 def click_extend_button(sb):
     selectors = [
         'span:contains("Extend")',
@@ -83,6 +83,46 @@ def click_extend_button(sb):
         return True, {}
     except Exception as e:
         return False, {"error": str(e)}
+
+# ========== 新增：稳健点击 Order now ==========
+def click_order_now(sb):
+    try:
+        sb.wait_for_element('button:contains("Order")', timeout=10)
+        print("✅ 弹窗已加载，准备点击 Order 按钮")
+    except Exception as e:
+        return False, f"弹窗加载超时: {e}"
+
+    strategies = [
+        ('button:contains("Order now")', '精确文本'),
+        ('button:contains("Order")', '包含 Order'),
+        ('button:contains("order")', '小写 order'),
+        ('button:contains("立即购买")', '中文'),
+        ('button[class*="order"]', 'class 包含 order'),
+        ('button[class*="btn-primary"]:contains("Order")', '主按钮'),
+    ]
+
+    for selector, desc in strategies:
+        try:
+            btn = sb.find_element(selector, timeout=3)
+            if btn:
+                print(f"🛒 尝试点击 '{desc}' 选择器: {selector}")
+                sb.driver.execute_script("arguments[0].scrollIntoView({block: 'center'});", btn)
+                time.sleep(0.5)
+                sb.uc_click(selector)
+                print(f"✅ 成功点击 Order 按钮")
+                return True, ""
+        except Exception as e:
+            print(f"⚠️ 策略 '{desc}' 失败: {e}")
+
+    try:
+        btn = sb.find_element('button:contains("Order")', timeout=2)
+        if btn:
+            sb.driver.execute_script("arguments[0].click();", btn)
+            print("✅ 通过 JavaScript 强制点击成功")
+            return True, ""
+    except Exception as e:
+        return False, f"所有点击策略均失败: {e}"
+    return False, "未找到任何可点击的 Order 按钮"
 
 # ========== 检查续期结果 ==========
 def check_renewal_success(sb):
@@ -135,7 +175,7 @@ def get_server_time_info(sb, refresh=False):
         print(f"⚠️ 获取服务器时间信息失败: {e}")
     return None
 
-# ========== 登录尝试 ==========
+# ========== 登录相关（不变） ==========
 def perform_login_attempt(sb, email, password, attempt_number):
     print(f"\n🔄 登录尝试 {attempt_number}/2")
     print("🌐 打开登录页面...")
@@ -208,9 +248,7 @@ def login(sb, email, password):
             return True, url
     return False, sb.get_current_url()
 
-# ============================================================
-# 方案二：全局唯一任务调度（只保留一个，20分钟触发）
-# ============================================================
+# ========== 调度：全局唯一任务（只保留一个） ==========
 def schedule_via_cronjob(trigger_timestamp, gh_token, repo, workflow_id, api_key, branch="main"):
     dt = datetime.fromtimestamp(trigger_timestamp)
     schedule = {
@@ -260,7 +298,6 @@ def schedule_via_cronjob(trigger_timestamp, gh_token, repo, workflow_id, api_key
         jobs = jobs_data.get("jobs", [])
         print(f"📋 现有任务数量: {len(jobs)}")
 
-        # 查找与 dispatch_url 匹配的任务
         matching_jobs = [j for j in jobs if j.get("url") == dispatch_url]
 
         # 删除多余的匹配任务（只保留第一个）
@@ -274,7 +311,6 @@ def schedule_via_cronjob(trigger_timestamp, gh_token, repo, workflow_id, api_key
                     print(f"⚠️ 删除 job {job_id} 失败: {del_resp.status_code}")
 
         if matching_jobs:
-            # 更新第一个匹配的任务
             job_id = matching_jobs[0].get("jobId")
             print(f"🔄 更新现有任务 ID: {job_id}")
             update_resp = requests.patch(
@@ -290,7 +326,6 @@ def schedule_via_cronjob(trigger_timestamp, gh_token, repo, workflow_id, api_key
                 print(f"❌ 更新任务失败: {update_resp.status_code} {update_resp.text}")
                 return False
         else:
-            # 没有匹配的任务，创建新任务
             print("📤 创建新任务...")
             create_resp = requests.put("https://api.cron-job.org/jobs", headers=headers, json=payload, timeout=30)
             if create_resp.status_code == 200:
@@ -337,7 +372,7 @@ def main():
         sb.sleep(3)
         screenshot_step(sb, "server_list")
 
-        # ---------- 获取到期时间（UTC） ----------
+        # ---------- 获取到期时间 ----------
         expiry_time_utc_str = get_server_time_info(sb)
         if expiry_time_utc_str:
             expiry_dt = datetime.strptime(expiry_time_utc_str, "%Y-%m-%d %H:%M")
@@ -364,41 +399,10 @@ def main():
         time.sleep(3)
         screenshot_step(sb, "extend_clicked")
 
-        # 尝试多种方式点击 "Order now"
-        order_clicked = False
-        try:
-            # 先找按钮
-            btn = sb.find_element('button:contains("Order now")', timeout=5)
-            if btn:
-                print("🛒 点击 Order now 按钮...")
-                sb.uc_click('button:contains("Order now")')
-                order_clicked = True
-        except:
-            pass
-
-        if not order_clicked:
-            try:
-                # 尝试通过文本包含 "Order" 或 "order" 的按钮
-                btn = sb.find_element('button:contains("Order")', timeout=3)
-                if btn:
-                    print("🛒 通过 'Order' 文本点击按钮...")
-                    sb.uc_click('button:contains("Order")')
-                    order_clicked = True
-            except:
-                pass
-
-        if not order_clicked:
-            # 尝试 JavaScript 点击
-            try:
-                btn = sb.find_element('button:contains("Order now")', timeout=2)
-                sb.driver.execute_script("arguments[0].click();", btn)
-                print("✅ 通过 JavaScript 点击 Order now 成功")
-                order_clicked = True
-            except Exception as e:
-                print(f"❌ 点击 Order now 失败: {e}")
-
-        if not order_clicked:
-            msg = f"{base_header}\n\n❌ 未找到 Order now 按钮{time_info}{url_line}"
+        # 点击 Order now（使用新函数）
+        order_ok, order_err = click_order_now(sb)
+        if not order_ok:
+            msg = f"{base_header}\n\n❌ 点击 Order now 失败: {order_err}{time_info}{url_line}"
             print(msg)
             send_tg(TG_BOT_TOKEN, TG_CHAT_ID, msg)
             return
@@ -454,7 +458,6 @@ def main():
             if not all([GH_TOKEN, GH_REPO, GH_WORKFLOW_ID, CRONJOB_API_KEY]):
                 print("⚠️ 缺少必要的环境变量，跳过调度")
             else:
-                # 只调度一次（20分钟）
                 minutes_before = 20
                 trigger_ts = expiry_ts - (minutes_before * 60)
                 if trigger_ts > time.time() + 60:
