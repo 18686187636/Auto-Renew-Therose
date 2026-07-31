@@ -70,152 +70,56 @@ def get_current_ip(proxy_server=None):
 def get_beijing_time():
     return (datetime.utcnow() + timedelta(hours=8)).strftime("%Y-%m-%d %H:%M:%S")
 
-# ========== 点击 Extend 按钮 ==========
+# ========== 点击 Extend 按钮（使用 #73 成功的 span:contains） ==========
 def click_extend_button(sb):
     try:
         sb.click('span:contains("Extend")', timeout=3)
-        print("✅ 点击 Extend 成功 (sb.click)")
+        print("✅ 点击 Extend 成功")
         return True, {}
     except Exception as e:
-        print(f"⚠️ sb.click 失败: {e}")
-
-    try:
-        element = sb.find_element('span:contains("Extend")', timeout=2)
-        if element is not None:
-            sb.driver.execute_script("arguments[0].scrollIntoView({block: 'center'});", element.webelement)
-            time.sleep(0.5)
-            sb.driver.execute_script("arguments[0].click();", element.webelement)
-            print("✅ 点击 Extend 成功 (JS)")
-            return True, {}
-    except Exception as e:
-        print(f"⚠️ JS 点击失败: {e}")
-
-    try:
-        buttons = sb.find_elements('button')
-        for btn in buttons:
-            if btn is None:
-                continue
-            text = btn.text.strip().lower()
-            if 'extend' in text:
-                sb.driver.execute_script("arguments[0].scrollIntoView({block: 'center'});", btn.webelement)
-                time.sleep(0.5)
-                sb.driver.execute_script("arguments[0].click();", btn.webelement)
-                print("✅ 通过遍历点击 Extend 成功")
-                return True, {}
-    except Exception as e:
         return False, {"error": str(e)}
-    return False, {"error": "未找到 Extend 按钮"}
 
-# ========== 点击确认按钮 ==========
-def click_confirm_choices(sb):
-    try:
-        sb.click('button:contains("Confirm choices")', timeout=2)
-        print("✅ 点击 Confirm choices 成功")
-        return True
-    except Exception as e:
-        print(f"⚠️ 点击 Confirm choices 失败: {e}")
-
-    try:
-        element = sb.find_element('button:contains("Confirm choices")', timeout=2)
-        if element is not None and element.is_displayed():
-            sb.driver.execute_script("arguments[0].scrollIntoView({block: 'center'});", element.webelement)
-            time.sleep(0.5)
-            sb.driver.execute_script("arguments[0].click();", element.webelement)
-            print("✅ 点击确认按钮成功 (JS)")
-            return True
-    except Exception as e:
-        print(f"⚠️ 查找确认按钮失败: {e}")
-
-    try:
-        buttons = sb.find_elements('button')
-        for btn in buttons:
-            if btn is None:
-                continue
-            text = btn.text.strip().lower()
-            if any(kw in text for kw in ['confirm', 'yes', '确定', '确认']):
-                sb.driver.execute_script("arguments[0].scrollIntoView({block: 'center'});", btn.webelement)
-                time.sleep(0.5)
-                sb.driver.execute_script("arguments[0].click();", btn.webelement)
-                print("✅ 通过遍历点击确认按钮成功")
-                return True
-    except Exception as e:
-        print(f"⚠️ 遍历确认失败: {e}")
-    return False
-
-# ========== 点击 Order now（增加更多选择器，移除早期无需续期检测） ==========
+# ========== 点击 Order now（优先 ID，然后 button:contains） ==========
 def click_order_now(sb):
-    print("⏳ 等待页面加载...")
-    time.sleep(3)
-
-    current_url = sb.get_current_url()
-    print(f"📄 当前 URL: {current_url}")
-
-    # 如果 URL 不是 cart_renew，尝试点击确认按钮
-    if "cart_renew" not in current_url:
-        print("🔍 检测到可能需要在当前页面点击确认按钮")
-        if click_confirm_choices(sb):
-            print("✅ 点击确认后等待跳转...")
-            time.sleep(5)
-            current_url = sb.get_current_url()
-            print(f"📄 点击确认后 URL: {current_url}")
-            # 再额外等待，确保页面内容加载完成
-            time.sleep(3)
-
-    # 定义一系列选择器（按优先级排序）
-    selectors = [
-        '#order-submit',                          # ID
-        'button:contains("Order now")',           # 精确文本
-        'button:contains("Order")',               # 包含 Order
-        'button:contains("Renew")',               # 包含 Renew
-        'button[type="submit"]',                  # type=submit
-        'button:contains("购买")',                # 中文购买
-        'button:contains("续期")',                # 中文续期
-        '//*[contains(translate(text(), "ABCDEFGHIJKLMNOPQRSTUVWXYZ", "abcdefghijklmnopqrstuvwxyz"), "order")]',  # XPath 不区分大小写
-    ]
-
-    # 尝试每个选择器
-    for selector in selectors:
-        try:
-            # 使用 sb.click 尝试点击，内部会等待元素出现
-            sb.click(selector, timeout=10)
-            print(f"✅ 通过选择器点击成功: {selector}")
+    # 首先等待 #order-submit（最长 20 秒）
+    try:
+        wait = WebDriverWait(sb.driver, 20)
+        element = wait.until(EC.presence_of_element_located((By.CSS_SELECTOR, "#order-submit")))
+        if element is not None:
+            print("✅ 找到 Order now 按钮 (ID: #order-submit)")
+            sb.driver.execute_script("arguments[0].scrollIntoView({block: 'center'});", element)
+            time.sleep(0.5)
+            sb.driver.execute_script("arguments[0].click();", element)
+            print("✅ 点击 Order now 成功 (ID)")
             return True, ""
-        except Exception as e:
-            print(f"⚠️ 选择器 {selector} 失败: {e}")
+    except Exception as e:
+        print(f"⚠️ 通过 ID 点击失败: {e}")
 
-    # 若均失败，尝试遍历所有按钮（最后兜底）
+    # 备选：button:contains("Order now")
+    try:
+        sb.click('button:contains("Order now")', timeout=5)
+        print("✅ 点击 Order now 成功 (button:contains)")
+        return True, ""
+    except Exception as e:
+        print(f"⚠️ button:contains 失败: {e}")
+
+    # 最后遍历所有按钮
     try:
         buttons = sb.find_elements('button')
         for btn in buttons:
             if btn is None:
                 continue
             text = btn.text.strip().lower()
-            if any(kw in text for kw in ['order', 'renew', 'purchase', 'buy', '立即购买', '续期']):
-                print(f"🛒 通过遍历按钮找到: {text[:30]}")
+            if 'order now' in text or 'order' in text:
                 sb.driver.execute_script("arguments[0].scrollIntoView({block: 'center'});", btn.webelement)
                 time.sleep(0.5)
                 sb.driver.execute_script("arguments[0].click();", btn.webelement)
-                print("✅ 点击成功 (遍历按钮)")
+                print("✅ 通过遍历点击 Order now 成功")
                 return True, ""
     except Exception as e:
         print(f"⚠️ 遍历按钮失败: {e}")
 
-    # 如果仍然失败，检查页面是否包含“无需续期”等关键词（作为最后兜底）
-    page_source = sb.get_page_source().lower()
-    no_renewal_keywords = [
-        'no server needs renewal',
-        'already renewed',
-        'not due for renewal',
-        '无需续期',
-        '已续期',
-        '无需操作',
-        'you have no server'
-    ]
-    if any(kw in page_source for kw in no_renewal_keywords):
-        print("✅ 检测到无需续期，视为成功")
-        return True, "无需续期"
-
-    return False, "未找到任何可点击的 Order/Renew 按钮，且未检测到无需续期提示"
+    return False, "未找到 Order now 按钮"
 
 # ========== 检查续期结果 ==========
 def check_renewal_success(sb):
@@ -241,13 +145,6 @@ def check_renewal_success(sb):
                 return True, text
         except:
             continue
-    try:
-        page_source = sb.get_page_source()
-        if "successfully purchased" in page_source.lower() or "purchased successfully" in page_source.lower():
-            print("✅ 页面源码中发现成功关键词")
-            return True, "服务器已成功续期"
-    except:
-        pass
     return False, "未检测到续期成功提示"
 
 # ========== 获取服务器到期时间 ==========
@@ -268,7 +165,7 @@ def get_server_time_info(sb, refresh=False):
         print(f"⚠️ 获取服务器时间信息失败: {e}")
     return None
 
-# ========== 登录相关 ==========
+# ========== 登录相关（同 #73） ==========
 def perform_login_attempt(sb, email, password, attempt_number):
     print(f"\n🔄 登录尝试 {attempt_number}/2")
     print("🌐 打开登录页面...")
@@ -341,7 +238,7 @@ def login(sb, email, password):
             return True, url
     return False, sb.get_current_url()
 
-# ========== 调度 ==========
+# ========== 调度：只创建一个任务（到期前20分钟） ==========
 def schedule_via_cronjob(trigger_timestamp, gh_token, repo, workflow_id, api_key, branch="main"):
     dt = datetime.fromtimestamp(trigger_timestamp)
     schedule = {
@@ -384,6 +281,7 @@ def schedule_via_cronjob(trigger_timestamp, gh_token, repo, workflow_id, api_key
     print(f"📤 调度触发时间: {dt}")
 
     try:
+        # 1. 获取所有现有任务
         resp = requests.get("https://api.cron-job.org/jobs", headers=headers, timeout=30)
         resp.raise_for_status()
         jobs_data = resp.json()
@@ -392,6 +290,7 @@ def schedule_via_cronjob(trigger_timestamp, gh_token, repo, workflow_id, api_key
 
         matching_jobs = [j for j in jobs if j.get("url") == dispatch_url]
 
+        # 删除多余的匹配任务（只保留第一个）
         for job in matching_jobs[1:]:
             job_id = job.get("jobId")
             if job_id:
@@ -499,13 +398,8 @@ def main():
 
         screenshot_step(sb, "ordernow_clicked")
 
-        # 如果返回的是"无需续期"，直接视为成功
-        if order_msg == "无需续期":
-            renewal_success = True
-            renewal_msg = "服务器无需续期（未到期或已续期）"
-        else:
-            print("🔍 检查续期结果...")
-            renewal_success, renewal_msg = check_renewal_success(sb)
+        print("🔍 检查续期结果...")
+        renewal_success, renewal_msg = check_renewal_success(sb)
         screenshot_step(sb, "renewal_result")
 
         if renewal_success:
