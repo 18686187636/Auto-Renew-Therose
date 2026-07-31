@@ -1,15 +1,9 @@
 #!/usr/bin/env python3
 
-import os
-import sys
-import time
-import requests
+import os, re, sys, time, requests
 import json
 from datetime import datetime, timedelta
 from seleniumbase import SB
-from selenium.webdriver.common.by import By
-from selenium.webdriver.support.ui import WebDriverWait
-from selenium.webdriver.support import expected_conditions as EC
 
 # ========== 环境变量 ==========
 EMAIL = os.environ.get("EMAIL") or ""
@@ -35,11 +29,8 @@ if not EMAIL or not PASSWORD:
 def screenshot_step(sb, step_name):
     timestamp = int(time.time() * 1000)
     filename = f"step_{step_name}_{timestamp}.png"
-    try:
-        sb.save_screenshot(filename)
-        print(f"📸 截图已保存: {filename}")
-    except Exception as e:
-        print(f"⚠️ 截图失败: {e}")
+    sb.save_screenshot(filename)
+    print(f"📸 截图已保存: {filename}")
 
 def send_tg(token, chat_id, message):
     if not token or not chat_id:
@@ -70,61 +61,30 @@ def get_current_ip(proxy_server=None):
 def get_beijing_time():
     return (datetime.utcnow() + timedelta(hours=8)).strftime("%Y-%m-%d %H:%M:%S")
 
-# ========== 点击 Extend 按钮 ==========
+# ========== 续期按钮点击 ==========
 def click_extend_button(sb):
+    selectors = [
+        'span:contains("Extend")',
+        'button:contains(title="Extend")',
+    ]
+    for sel in selectors:
+        try:
+            if sb.find_element(sel, timeout=2):
+                print(f"✅ 找到按钮，选择器: {sel}")
+                sb.uc_click(sel, timeout=5)
+                print("✅ 点击成功")
+                return True, {}
+        except:
+            continue
     try:
-        sb.click('span:contains("Extend")', timeout=3)
-        print("✅ 点击 Extend 成功")
+        btn = sb.find_element('button:contains("Extend")', timeout=2)
+        sb.driver.execute_script("arguments[0].click();", btn)
+        print("✅ 通过 JavaScript 点击成功")
         return True, {}
     except Exception as e:
         return False, {"error": str(e)}
 
-# ========== 点击 Order now（增加延时5秒） ==========
-def click_order_now(sb):
-    # 增加固定延时 5 秒，确保页面稳定，减少连接错误
-    time.sleep(5)
-
-    # 首先等待 #order-submit（最长 20 秒）
-    try:
-        wait = WebDriverWait(sb.driver, 20)
-        element = wait.until(EC.presence_of_element_located((By.CSS_SELECTOR, "#order-submit")))
-        if element is not None:
-            print("✅ 找到 Order now 按钮 (ID: #order-submit)")
-            sb.driver.execute_script("arguments[0].scrollIntoView({block: 'center'});", element)
-            time.sleep(0.5)
-            sb.driver.execute_script("arguments[0].click();", element)
-            print("✅ 点击 Order now 成功 (ID)")
-            return True, ""
-    except Exception as e:
-        print(f"⚠️ 通过 ID 点击失败: {e}")
-
-    # 备选：button:contains("Order now")
-    try:
-        sb.click('button:contains("Order now")', timeout=5)
-        print("✅ 点击 Order now 成功 (button:contains)")
-        return True, ""
-    except Exception as e:
-        print(f"⚠️ button:contains 失败: {e}")
-
-    # 最后遍历所有按钮
-    try:
-        buttons = sb.find_elements('button')
-        for btn in buttons:
-            if btn is None:
-                continue
-            text = btn.text.strip().lower()
-            if 'order now' in text or 'order' in text:
-                sb.driver.execute_script("arguments[0].scrollIntoView({block: 'center'});", btn.webelement)
-                time.sleep(0.5)
-                sb.driver.execute_script("arguments[0].click();", btn.webelement)
-                print("✅ 通过遍历点击 Order now 成功")
-                return True, ""
-    except Exception as e:
-        print(f"⚠️ 遍历按钮失败: {e}")
-
-    return False, "未找到 Order now 按钮"
-
-# ========== 检查续期结果 ==========
+# ========== 检查续期结果（增强版） ==========
 def check_renewal_success(sb):
     success_selectors = [
         '.alert-success',
@@ -141,17 +101,30 @@ def check_renewal_success(sb):
     for selector in success_selectors:
         try:
             element = sb.find_element(selector, timeout=3)
-            if element is not None:
+            if element:
                 text = element.text
                 print(f"✅ 发现成功提示！选择器: {selector}")
                 print(f"📝 提示内容: {text}")
                 return True, text
         except:
             continue
+    try:
+        page_source = sb.get_page_source()
+        if "successfully purchased" in page_source.lower() or "purchased successfully" in page_source.lower():
+            print("✅ 页面源码中发现成功关键词")
+            return True, "服务器已成功续期"
+    except:
+        pass
     return False, "未检测到续期成功提示"
 
-# ========== 获取服务器到期时间 ==========
+# ================================================
+# 修改点1：为 get_server_time_info 增加 refresh 参数
+# ================================================
 def get_server_time_info(sb, refresh=False):
+    """
+    获取服务器到期时间（UTC 字符串）
+    如果 refresh=True，则重新打开服务器列表页面获取最新时间
+    """
     try:
         if refresh:
             print("🔄 刷新服务器列表页面以获取最新到期时间...")
@@ -159,16 +132,17 @@ def get_server_time_info(sb, refresh=False):
             sb.sleep(3)
             screenshot_step(sb, "refresh_server_list")
         el = sb.find_element('span.fw-bold.text-muted', timeout=10)
-        if el is not None:
+        if el:
             time_str = el.text.strip()
             print(f"📅 服务器到期时间 (UTC): {time_str}")
+            # 验证格式
             datetime.strptime(time_str, "%Y-%m-%d %H:%M")
             return time_str
     except Exception as e:
         print(f"⚠️ 获取服务器时间信息失败: {e}")
     return None
 
-# ========== 登录相关 ==========
+# ========== 单次登录尝试 ==========
 def perform_login_attempt(sb, email, password, attempt_number):
     print(f"\n🔄 登录尝试 {attempt_number}/2")
     print("🌐 打开登录页面...")
@@ -228,10 +202,11 @@ def perform_login_attempt(sb, email, password, attempt_number):
     sb.save_screenshot(f"login_failed_attempt_{attempt_number}.png")
     return False, sb.get_current_url()
 
+# ========== 登录主函数 ==========
 def login(sb, email, password):
     try:
-        sb.driver.set_page_load_timeout(120)
-        sb.driver.set_script_timeout(120)
+        sb.driver.set_page_load_timeout(60)
+        sb.driver.set_script_timeout(60)
     except Exception as e:
         print(f"⚠️ 设置超时失败: {e}")
 
@@ -241,7 +216,7 @@ def login(sb, email, password):
             return True, url
     return False, sb.get_current_url()
 
-# ========== 调度：只创建一个任务（到期前20分钟） ==========
+# ========== 调度函数（增强版，开启 saveResponses） ==========
 def schedule_via_cronjob(trigger_timestamp, gh_token, repo, workflow_id, api_key, branch="main"):
     dt = datetime.fromtimestamp(trigger_timestamp)
     schedule = {
@@ -254,12 +229,12 @@ def schedule_via_cronjob(trigger_timestamp, gh_token, repo, workflow_id, api_key
         "expiresAt": (dt + timedelta(minutes=5)).strftime("%Y%m%d%H%M%S")
     }
 
-    dispatch_url = f"https://api.github.com/repos/{repo}/actions/workflows/{workflow_id}/dispatches"
+    url = f"https://api.github.com/repos/{repo}/actions/workflows/{workflow_id}/dispatches"
 
     payload = {
         "job": {
             "enabled": True,
-            "url": dispatch_url,
+            "url": url,
             "requestMethod": 1,
             "saveResponses": True,
             "schedule": schedule,
@@ -281,55 +256,20 @@ def schedule_via_cronjob(trigger_timestamp, gh_token, repo, workflow_id, api_key
         "Content-Type": "application/json"
     }
 
-    print(f"📤 调度触发时间: {dt}")
-
+    print(f"📤 发送请求到 cron-job.org，触发时间: {dt}")
     try:
-        # 1. 获取所有现有任务
-        resp = requests.get("https://api.cron-job.org/jobs", headers=headers, timeout=30)
-        resp.raise_for_status()
-        jobs_data = resp.json()
-        jobs = jobs_data.get("jobs", [])
-        print(f"📋 现有任务数量: {len(jobs)}")
-
-        matching_jobs = [j for j in jobs if j.get("url") == dispatch_url]
-
-        # 删除多余的匹配任务（只保留第一个）
-        for job in matching_jobs[1:]:
-            job_id = job.get("jobId")
-            if job_id:
-                del_resp = requests.delete(f"https://api.cron-job.org/jobs/{job_id}", headers=headers, timeout=30)
-                if del_resp.status_code == 200:
-                    print(f"🗑️ 已删除多余的 job {job_id}")
-                else:
-                    print(f"⚠️ 删除 job {job_id} 失败: {del_resp.status_code}")
-
-        if matching_jobs:
-            job_id = matching_jobs[0].get("jobId")
-            print(f"🔄 更新现有任务 ID: {job_id}")
-            update_resp = requests.patch(
-                f"https://api.cron-job.org/jobs/{job_id}",
-                headers=headers,
-                json=payload,
-                timeout=30
-            )
-            if update_resp.status_code == 200:
-                print(f"✅ 任务已更新，ID: {job_id}")
-                return True
-            else:
-                print(f"❌ 更新任务失败: {update_resp.status_code} {update_resp.text}")
-                return False
+        resp = requests.put("https://api.cron-job.org/jobs", headers=headers, json=payload, timeout=30)
+        print(f"📥 响应状态码: {resp.status_code}")
+        if resp.status_code == 200:
+            job_id = resp.json().get("jobId")
+            print(f"✅ 已创建 cron 任务 (ID: {job_id})")
+            return True
         else:
-            print("📤 创建新任务...")
-            create_resp = requests.put("https://api.cron-job.org/jobs", headers=headers, json=payload, timeout=30)
-            if create_resp.status_code == 200:
-                job_id = create_resp.json().get("jobId")
-                print(f"✅ cron-job 创建成功，ID: {job_id}")
-                return True
-            else:
-                print(f"❌ 创建任务失败: {create_resp.status_code} {create_resp.text}")
-                return False
+            print(f"❌ 创建 cron 任务失败: HTTP {resp.status_code}")
+            print(f"❌ 响应内容: {resp.text[:500]}")
+            return False
     except Exception as e:
-        print(f"❌ 操作 cron-job.org API 异常: {e}")
+        print(f"❌ 调用 cron-job.org API 异常: {e}")
         return False
 
 # ========== 主流程 ==========
@@ -352,12 +292,6 @@ def main():
 
     with SB(uc=True, headless=False, proxy=PROXY_SERVER or None,
             page_load_strategy='eager') as sb:
-        try:
-            sb.driver.set_page_load_timeout(120)
-            sb.driver.set_script_timeout(120)
-        except:
-            pass
-
         success, url = login(sb, EMAIL, PASSWORD)
 
         if not success:
@@ -371,6 +305,7 @@ def main():
         sb.sleep(3)
         screenshot_step(sb, "server_list")
 
+        # ---------- 获取到期时间（UTC） ----------
         expiry_time_utc_str = get_server_time_info(sb)
         if expiry_time_utc_str:
             expiry_dt = datetime.strptime(expiry_time_utc_str, "%Y-%m-%d %H:%M")
@@ -384,6 +319,7 @@ def main():
 
         url_line = "\nhttps://therose.cloud/"
 
+        # ---------- 续期流程 ----------
         print("📄 开始续期流程...")
         ok, info = click_extend_button(sb)
         if not ok:
@@ -392,23 +328,39 @@ def main():
             send_tg(TG_BOT_TOKEN, TG_CHAT_ID, msg)
             return
 
-        order_ok, order_msg = click_order_now(sb)
-        if not order_ok:
-            msg = f"{base_header}\n\n❌ 点击 Order now 失败: {order_msg}{time_info}{url_line}"
+        time.sleep(1)
+        screenshot_step(sb, "extend_clicked")
+
+        try:
+            button = sb.find_element('button:contains("Order now")', timeout=5)
+            if button:
+                print("🛒 点击 Order now 按钮...")
+                sb.uc_click('button:contains("Order now")')
+                print("✅ 已点击 Order now 按钮")
+                screenshot_step(sb, "ordernow_clicked")
+            else:
+                msg = f"{base_header}\n\n❌ 未找到 Order now 按钮{time_info}{url_line}"
+                print(msg)
+                send_tg(TG_BOT_TOKEN, TG_CHAT_ID, msg)
+                return
+        except Exception as e:
+            msg = f"{base_header}\n\n❌ 点击 Order now 失败: {e}{time_info}{url_line}"
             print(msg)
             send_tg(TG_BOT_TOKEN, TG_CHAT_ID, msg)
             return
-
-        screenshot_step(sb, "ordernow_clicked")
 
         print("🔍 检查续期结果...")
         renewal_success, renewal_msg = check_renewal_success(sb)
         screenshot_step(sb, "renewal_result")
 
+        # ========================================================
+        # 修改点2：续期成功后，重新获取最新的到期时间
+        # ========================================================
         if renewal_success:
             print("✅ 续期成功，重新获取最新到期时间...")
             new_expiry_utc_str = get_server_time_info(sb, refresh=True)
             if new_expiry_utc_str:
+                # 更新到期时间
                 expiry_time_utc_str = new_expiry_utc_str
                 expiry_dt = datetime.strptime(expiry_time_utc_str, "%Y-%m-%d %H:%M")
                 expiry_beijing = expiry_dt + timedelta(hours=8)
@@ -417,9 +369,11 @@ def main():
                 print(f"⏰ 最新的到期 (UTC): {expiry_time_utc_str} -> 北京时间: {expiry_beijing_str}")
             else:
                 print("⚠️ 重新获取时间失败，将使用之前的时间")
+                # 保留原有 time_info
         else:
             print("ℹ️ 续期未成功，不重新获取时间")
 
+        # 构建最终消息
         if renewal_success:
             msg = f"{base_header}\n\n✅ 续期成功！{renewal_msg}{time_info}{url_line}"
             print(msg)
@@ -431,6 +385,7 @@ def main():
 
         send_tg(TG_BOT_TOKEN, TG_CHAT_ID, msg)
 
+        # ---------- 自我调度（使用最新到期时间） ----------
         should_schedule = (renewal_success or FORCE_SCHEDULE) and expiry_time_utc_str is not None
 
         if should_schedule:
@@ -447,18 +402,19 @@ def main():
             if not all([GH_TOKEN, GH_REPO, GH_WORKFLOW_ID, CRONJOB_API_KEY]):
                 print("⚠️ 缺少必要的环境变量，跳过调度")
             else:
-                minutes_before = 20
-                trigger_ts = expiry_ts - (minutes_before * 60)
-                if trigger_ts > time.time() + 60:
-                    success_schedule = schedule_via_cronjob(
-                        trigger_ts, GH_TOKEN, GH_REPO, GH_WORKFLOW_ID, CRONJOB_API_KEY
-                    )
-                    if success_schedule:
-                        print(f"✅ 已安排 {minutes_before} 分钟后触发")
+                for minutes_before in [20, 10]:
+                    trigger_ts = expiry_ts - (minutes_before * 60)
+                    if trigger_ts > time.time() + 60:
+                        success_schedule = schedule_via_cronjob(
+                            trigger_ts, GH_TOKEN, GH_REPO, GH_WORKFLOW_ID, CRONJOB_API_KEY
+                        )
+                        if success_schedule:
+                            print(f"✅ 已安排 {minutes_before} 分钟后触发")
+                        else:
+                            print(f"❌ 安排 {minutes_before} 分钟后触发失败")
+                        time.sleep(2)
                     else:
-                        print(f"❌ 安排 {minutes_before} 分钟后触发失败")
-                else:
-                    print(f"⚠️ 触发时间 {datetime.fromtimestamp(trigger_ts)} 已过期或太近，跳过")
+                        print(f"⚠️ 触发时间 {datetime.fromtimestamp(trigger_ts)} 已过期或太近，跳过")
         else:
             if not renewal_success:
                 print("ℹ️ 续期未成功，且未开启强制调度，不安排下次执行（避免死循环）")
