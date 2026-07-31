@@ -87,37 +87,28 @@ def click_extend_button(sb):
     except Exception as e:
         return False, {"error": str(e)}
 
-# ========== 增强版 Order now 点击（处理页面跳转） ==========
+# ========== 增强版 Order now 点击（修复序列化问题） ==========
 def click_order_now(sb):
-    """
-    点击 Order now 按钮，支持新页面加载或模态框两种情况。
-    """
-    print("⏳ 等待页面或弹窗加载...")
-    # 先等待 3 秒让页面开始跳转
-    time.sleep(3)
-
-    # 检查 URL 是否变化（可能跳转到新的订单页）
+    print("⏳ 等待页面加载...")
+    time.sleep(3)  # 等待新页面加载
     current_url = sb.get_current_url()
     print(f"📄 当前 URL: {current_url}")
 
-    # 如果 URL 包含 "panel" 或 "servers"，可能还在列表页，检查是否有模态框
-    # 但也可能是同页刷新，我们统一等待目标元素
-
-    # 策略1：通过 ID 定位（优先）
+    # 策略1：通过 ID 定位
     try:
-        sb.wait_for_element('#order-submit', timeout=15)
-        print("✅ 检测到 Order now 按钮 (ID: #order-submit)")
-        btn = sb.find_element('#order-submit', timeout=3)
+        btn = sb.find_element('#order-submit', timeout=15)
         if btn:
+            print("✅ 检测到 Order now 按钮 (ID: #order-submit)")
             sb.driver.execute_script("arguments[0].scrollIntoView({block: 'center'});", btn)
             time.sleep(0.5)
-            sb.uc_click('#order-submit')
+            # 使用 JS 点击，避免 uc_click 的序列化问题
+            sb.driver.execute_script("arguments[0].click();", btn)
             print("✅ 点击 Order now 成功 (ID 方式)")
             return True, ""
     except Exception as e:
         print(f"⚠️ 通过 ID 点击失败: {e}")
 
-    # 策略2：备用选择器（适用于新页面或弹窗）
+    # 策略2：备用选择器
     strategies = [
         ('button:contains("Order now")', '精确文本'),
         ('button:contains("Order")', '包含 Order'),
@@ -126,7 +117,7 @@ def click_order_now(sb):
         ('button:contains("续期")', '续期'),
         ('a:contains("Order")', 'a 标签'),
         ('span:contains("Order")', 'span'),
-        ('//*[contains(translate(text(), "ABCDEFGHIJKLMNOPQRSTUVWXYZ", "abcdefghijklmnopqrstuvwxyz"), "order")]', 'XPath 不区分大小写'),
+        ('//*[contains(translate(text(), "ABCDEFGHIJKLMNOPQRSTUVWXYZ", "abcdefghijklmnopqrstuvwxyz"), "order")]', 'XPath'),
     ]
 
     for selector, desc in strategies:
@@ -136,13 +127,13 @@ def click_order_now(sb):
                 print(f"🛒 备用策略 '{desc}' 成功，选择器: {selector}")
                 sb.driver.execute_script("arguments[0].scrollIntoView({block: 'center'});", element)
                 time.sleep(0.5)
-                sb.uc_click(selector)
+                sb.driver.execute_script("arguments[0].click();", element)
                 print("✅ 点击成功 (备用策略)")
                 return True, ""
         except Exception as e:
             continue
 
-    # 策略3：遍历所有按钮（仅限 button 标签）
+    # 策略3：遍历所有按钮
     try:
         buttons = sb.find_elements('button')
         for btn in buttons:
@@ -430,7 +421,7 @@ def main():
             send_tg(TG_BOT_TOKEN, TG_CHAT_ID, msg)
             return
 
-        # 点击 Order now（新函数已适配页面跳转）
+        # 点击 Order now（新函数已修复）
         order_ok, order_err = click_order_now(sb)
         if not order_ok:
             msg = f"{base_header}\n\n❌ 点击 Order now 失败: {order_err}{time_info}{url_line}"
