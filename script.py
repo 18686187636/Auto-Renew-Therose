@@ -84,20 +84,28 @@ def click_extend_button(sb):
         except Exception as e2:
             return False, {"error": f"两种方式均失败: {e2}"}
 
-# ========== 点击 Order now（保持原逻辑，可后续优化） ==========
+# ========== 点击 Order now（采用精确选择器，并保留备选逻辑） ==========
 def click_order_now(sb):
     # 增加固定延时 5 秒，确保页面稳定
     time.sleep(5)
 
-    # 首选：button:contains("Order now")
+    # 首选：使用用户提供的精确 CSS 选择器（ID + 类组合）
     try:
-        sb.click('button:contains("Order now")', timeout=10)
-        print("✅ 点击 Order now 成功 (button:contains)")
+        sb.click('button#order-submit.btn.success.btn-lg.rounded-pill.fw-semibold.p-3', timeout=10)
+        print("✅ 点击 Order now 成功 (精确选择器)")
         return True, ""
     except Exception as e:
-        print(f"⚠️ button:contains 失败: {e}")
+        print(f"⚠️ 精确选择器失败: {e}")
 
-    # 备选：遍历所有按钮
+    # 备选：使用原有的 button:contains("Order now")
+    try:
+        sb.click('button:contains("Order now")', timeout=10)
+        print("✅ 点击 Order now 成功 (button:contains 备选)")
+        return True, ""
+    except Exception as e:
+        print(f"⚠️ button:contains 备选失败: {e}")
+
+    # 最后备选：遍历所有按钮
     try:
         buttons = sb.find_elements('button')
         for btn in buttons:
