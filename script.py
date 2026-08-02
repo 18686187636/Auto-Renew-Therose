@@ -30,26 +30,50 @@ if not EMAIL or not PASSWORD:
 
 # ========== 辅助函数 ==========
 def screenshot_step(sb, step_name):
+    """保存截图并返回文件名"""
     timestamp = int(time.time() * 1000)
     filename = f"step_{step_name}_{timestamp}.png"
     try:
         sb.save_screenshot(filename)
         print(f"📸 截图已保存: {filename}")
+        return filename
     except Exception as e:
         print(f"⚠️ 截图失败: {e}")
+        return None
 
-def send_tg(token, chat_id, message):
+def send_tg_text(token, chat_id, message):
+    """发送文本消息到 Telegram"""
     if not token or not chat_id:
         return
     url = f"https://api.telegram.org/bot{token}/sendMessage"
     try:
         resp = requests.post(url, json={"chat_id": chat_id, "text": message}, timeout=10)
         if resp.status_code == 200:
-            print("📨 Telegram 通知已发送")
+            print("📨 Telegram 文本通知已发送")
         else:
             print(f"❌ Telegram 发送失败: {resp.text}")
     except Exception as e:
         print(f"❌ Telegram 发送异常: {e}")
+
+def send_tg_photo(token, chat_id, photo_path, caption=""):
+    """发送本地图片到 Telegram"""
+    if not token or not chat_id:
+        return
+    if not photo_path or not os.path.exists(photo_path):
+        print(f"⚠️ 图片 {photo_path} 不存在，跳过发送")
+        return
+    url = f"https://api.telegram.org/bot{token}/sendPhoto"
+    try:
+        with open(photo_path, 'rb') as f:
+            files = {'photo': f}
+            data = {'chat_id': chat_id, 'caption': caption}
+            resp = requests.post(url, files=files, data=data, timeout=20)
+        if resp.status_code == 200:
+            print(f"📸 截图已通过 Telegram 发送: {photo_path}")
+        else:
+            print(f"❌ Telegram 发送图片失败: {resp.text}")
+    except Exception as e:
+        print(f"❌ 发送图片异常: {e}")
 
 def get_current_ip(proxy_server=None):
     proxies = None
@@ -76,15 +100,16 @@ def click_extend_button(sb):
     except Exception as e:
         return False, {"error": str(e)}
 
-# ========== 点击 Order now（先点击，再检查无需续期） ==========
+# ========== 点击 Order now（仅点击） ==========
 def click_order_now(sb):
-    time.sleep(5)
-
+    """只负责点击 Order now 按钮，不进行结果判断"""
     try:
         sb.click('button:contains("Order now")', timeout=10)
         print("✅ 点击 Order now 成功 (button:contains)")
+        return True, ""
     except Exception as e:
         print(f"⚠️ button:contains 失败: {e}")
+        # 尝试遍历按钮
         try:
             buttons = sb.find_elements('button')
             clicked = False
@@ -100,56 +125,45 @@ def click_order_now(sb):
                     clicked = True
                     break
             if not clicked:
-                page_text = sb.get_page_source().lower()
-                if 'you have no server' in page_text or 'no server' in page_text:
-                    print("⚠️ 账户无服务器，视为无需续期")
-                    return True, "无需续期"
-                return False, "未找到 Order now 按钮，且非无服务器情况"
+                return False, "未找到 Order now 按钮"
+            return True, ""
         except Exception as e2:
-            print(f"⚠️ 遍历按钮失败: {e2}")
             return False, f"点击失败: {e2}"
 
-    time.sleep(5)
-    page_text_after = sb.get_page_source().lower()
-    no_renewal_keywords = [
-        'not due for renewal',
-        'already renewed',
-        '无需续期',
-        '已续期',
-        'no server needs renewal',
-        'you have no server'
-    ]
-    if any(kw in page_text_after for kw in no_renewal_keywords):
-        print("✅ 点击 Order now 后检测到无需续期提示，视为成功")
-        return True, "无需续期"
+# ========== 检查续期结果（新函数） ==========
+def check_renewal_result(sb):
+    """
+    检查页面上的 alert 信息，返回 (状态, 消息)
+    状态: 'success' / 'no_need' / 'error' / 'unknown'
+    """
+    time.sleep(5)  # 等待 alert 出现
 
-    return True, ""
+    # 先检查 alert-danger（错误提示）
+    try:
+        danger_elem = sb.find_element('div.alert-danger', timeout=3)
+        if danger_elem is not None:
+            text = danger_elem.text.strip()
+            print(f"⚠️ 检测到错误提示: {text}")
+            if "Renewal is available only within 30 minutes before expiration" in text:
+                return "no_need", "未到期，需在到期前30分钟内续期（当前不满足）"
+            else:
+                return "error", f"续期出错: {text}"
+    except:
+        pass
 
-# ========== 检查续期结果 ==========
-def check_renewal_success(sb):
-    success_selectors = [
-        '.alert-success',
-        '.alert.alert-success',
-        'div[role="alert"].alert-success',
-        'div.alert-success',
-        'span:contains("successfully purchased")',
-        'div:contains("successfully purchased")',
-        'span:contains("purchased successfully")',
-        'div:contains("purchased successfully")'
-    ]
-    print("⏳ 等待10秒检查续期结果...")
-    time.sleep(10)
-    for selector in success_selectors:
-        try:
-            element = sb.find_element(selector, timeout=3)
-            if element is not None:
-                text = element.text
-                print(f"✅ 发现成功提示！选择器: {selector}")
-                print(f"📝 提示内容: {text}")
-                return True, text
-        except:
-            continue
-    return False, "未检测到续期成功提示"
+    # 再检查 alert-success（成功提示）
+    try:
+        success_elem = sb.find_element('div.alert-success', timeout=3)
+        if success_elem is not None:
+            text = success_elem.text.strip()
+            print(f"✅ 检测到成功提示: {text}")
+            if "successfully purchased" in text or "success" in text.lower():
+                return "success", "续期成功"
+    except:
+        pass
+
+    # 未检测到任何 alert
+    return "unknown", "未检测到明确的续期结果"
 
 # ========== 获取服务器到期时间 ==========
 def get_server_time_info(sb, refresh=False):
@@ -174,12 +188,11 @@ def perform_login_attempt(sb, email, password, attempt_number):
     print(f"\n🔄 登录尝试 {attempt_number}/2")
     print("🌐 打开登录页面...")
     sb.open(BASE_URL)
-    # 等待页面完全加载（最多30秒）
     sb.wait_for_ready_state_complete()
     time.sleep(3)
     screenshot_step(sb, f"attempt_{attempt_number}_page_loaded")
 
-    # 尝试多种邮箱输入框选择器
+    # 邮箱输入框
     email_selectors = [
         '#login_form_email',
         'input[type="email"]',
@@ -261,7 +274,6 @@ def perform_login_attempt(sb, email, password, attempt_number):
     screenshot_step(sb, f"attempt_{attempt_number}_after_6s_wait")
 
     print("🔑 点击登录按钮...")
-    # 登录按钮选择器
     login_btn_selectors = [
         'button:contains("Sign in")',
         'button[type="submit"]',
@@ -437,19 +449,31 @@ def main():
         except:
             pass
 
+        # ---------- 登录 ----------
         success, url = login(sb, EMAIL, PASSWORD)
 
         if not success:
             msg = f"{base_header}\n\n❌ 登录失败，请检查账号密码、代理或网络\nhttps://therose.cloud/"
             print(msg)
-            send_tg(TG_BOT_TOKEN, TG_CHAT_ID, msg)
+            send_tg_text(TG_BOT_TOKEN, TG_CHAT_ID, msg)
+            # 发送登录失败截图
+            login_fail_img = "login_failed_attempt_2.png"  # 或其他已保存的截图
+            if os.path.exists(login_fail_img):
+                send_tg_photo(TG_BOT_TOKEN, TG_CHAT_ID, login_fail_img, caption="登录失败截图")
             return
 
+        # 登录成功后发送截图（可选）
+        login_success_img = screenshot_step(sb, "login_success")
+        if login_success_img:
+            send_tg_photo(TG_BOT_TOKEN, TG_CHAT_ID, login_success_img, caption="✅ 登录成功")
+
+        # ---------- 打开服务器列表 ----------
         print("🌐 打开服务器列表页面...")
         sb.open("https://client.therose.cloud/panel?routeName=servers")
         sb.sleep(3)
         screenshot_step(sb, "server_list")
 
+        # 获取初始到期时间
         expiry_time_utc_str = get_server_time_info(sb)
         if expiry_time_utc_str:
             expiry_dt = datetime.strptime(expiry_time_utc_str, "%Y-%m-%d %H:%M")
@@ -463,36 +487,48 @@ def main():
 
         url_line = "\nhttps://therose.cloud/"
 
+        # ---------- 续期流程 ----------
         print("📄 开始续期流程...")
         ok, info = click_extend_button(sb)
         if not ok:
             msg = f"{base_header}\n\n❌ 点击 Extend 按钮失败: {info.get('error')}{time_info}{url_line}"
             print(msg)
-            send_tg(TG_BOT_TOKEN, TG_CHAT_ID, msg)
+            send_tg_text(TG_BOT_TOKEN, TG_CHAT_ID, msg)
             return
 
         time.sleep(3)
         screenshot_step(sb, "extend_clicked")
 
-        order_ok, order_msg = click_order_now(sb)
+        # 点击 Order now
+        order_ok, order_err = click_order_now(sb)
         if not order_ok:
-            msg = f"{base_header}\n\n❌ 点击 Order now 失败: {order_msg}{time_info}{url_line}"
+            msg = f"{base_header}\n\n❌ 点击 Order now 失败: {order_err}{time_info}{url_line}"
             print(msg)
-            send_tg(TG_BOT_TOKEN, TG_CHAT_ID, msg)
+            send_tg_text(TG_BOT_TOKEN, TG_CHAT_ID, msg)
             return
 
         screenshot_step(sb, "ordernow_clicked")
 
-        if order_msg == "无需续期":
-            renewal_success = True
-            renewal_msg = "服务器无需续期（未到期或已续期）"
-        else:
-            print("🔍 检查续期结果...")
-            renewal_success, renewal_msg = check_renewal_success(sb)
-        screenshot_step(sb, "renewal_result")
+        # ---------- 检查续期结果 ----------
+        status, result_msg = check_renewal_result(sb)
 
+        # 根据状态判定续期是否成功（或无需续期）
+        if status in ("success", "no_need"):
+            renewal_success = True
+            renewal_msg = result_msg
+        else:
+            renewal_success = False
+            renewal_msg = result_msg
+
+        # 截图并发送 Telegram 图片
+        result_img = screenshot_step(sb, "renewal_result")
+        if result_img:
+            caption = f"续期结果: {renewal_msg}"
+            send_tg_photo(TG_BOT_TOKEN, TG_CHAT_ID, result_img, caption)
+
+        # 如果续期成功（包括无需续期），则尝试刷新获取最新到期时间
         if renewal_success:
-            print("✅ 续期成功，重新获取最新到期时间...")
+            print("✅ 续期成功（或无需续期），重新获取最新到期时间...")
             new_expiry_utc_str = get_server_time_info(sb, refresh=True)
             if new_expiry_utc_str:
                 expiry_time_utc_str = new_expiry_utc_str
@@ -506,6 +542,7 @@ def main():
         else:
             print("ℹ️ 续期未成功，不重新获取时间")
 
+        # 构造最终消息并发送文本通知
         if renewal_success:
             msg = f"{base_header}\n\n✅ 续期成功！{renewal_msg}{time_info}{url_line}"
             print(msg)
@@ -515,8 +552,9 @@ def main():
             print(msg)
             sb.save_screenshot("renewal_failed.png")
 
-        send_tg(TG_BOT_TOKEN, TG_CHAT_ID, msg)
+        send_tg_text(TG_BOT_TOKEN, TG_CHAT_ID, msg)
 
+        # ---------- 调度下次运行 ----------
         should_schedule = (renewal_success or FORCE_SCHEDULE) and expiry_time_utc_str is not None
 
         if should_schedule:
