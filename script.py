@@ -67,61 +67,69 @@ def get_current_ip(proxy_server=None):
 def get_beijing_time():
     return (datetime.utcnow() + timedelta(hours=8)).strftime("%Y-%m-%d %H:%M:%S")
 
-# ========== 点击 Extend 按钮（采用类选择器 + 文本回退） ==========
+# ========== 点击 Extend 按钮 ==========
 def click_extend_button(sb):
-    # 首选：使用精确的类选择器 + 文本过滤（确保点击正确的 Extend）
     try:
-        sb.click('a.btn.secondary.w-100.d-flex.align-items-center.justify-content-center:contains("Extend")', timeout=5)
-        print("✅ 点击 Extend 成功 (类+文本)")
+        sb.click('span:contains("Extend")', timeout=3)
+        print("✅ 点击 Extend 成功")
         return True, {}
-    except Exception as e1:
-        print(f"⚠️ 类+文本方式失败: {e1}")
-        # 备选：使用原有 span:contains 方法
-        try:
-            sb.click('span:contains("Extend")', timeout=3)
-            print("✅ 点击 Extend 成功 (备用文本方式)")
-            return True, {}
-        except Exception as e2:
-            return False, {"error": f"两种方式均失败: {e2}"}
+    except Exception as e:
+        return False, {"error": str(e)}
 
-# ========== 点击 Order now（采用精确选择器，并保留备选逻辑） ==========
+# ========== 点击 Order now（先点击，再检查无需续期） ==========
 def click_order_now(sb):
-    # 增加固定延时 5 秒，确保页面稳定
+    # 等待页面稳定
     time.sleep(5)
 
-    # 首选：使用用户提供的精确 CSS 选择器（ID + 类组合）
-    try:
-        sb.click('button#order-submit.btn.success.btn-lg.rounded-pill.fw-semibold.p-3', timeout=10)
-        print("✅ 点击 Order now 成功 (精确选择器)")
-        return True, ""
-    except Exception as e:
-        print(f"⚠️ 精确选择器失败: {e}")
-
-    # 备选：使用原有的 button:contains("Order now")
+    # 首选：button:contains("Order now")
     try:
         sb.click('button:contains("Order now")', timeout=10)
-        print("✅ 点击 Order now 成功 (button:contains 备选)")
-        return True, ""
+        print("✅ 点击 Order now 成功 (button:contains)")
     except Exception as e:
-        print(f"⚠️ button:contains 备选失败: {e}")
+        print(f"⚠️ button:contains 失败: {e}")
+        # 备选：遍历所有按钮
+        try:
+            buttons = sb.find_elements('button')
+            clicked = False
+            for btn in buttons:
+                if btn is None:
+                    continue
+                text = btn.text.strip().lower()
+                if 'order now' in text or 'order' in text or 'renew' in text:
+                    sb.driver.execute_script("arguments[0].scrollIntoView({block: 'center'});", btn.webelement)
+                    time.sleep(0.5)
+                    sb.driver.execute_script("arguments[0].click();", btn.webelement)
+                    print("✅ 通过遍历点击 Order now 成功")
+                    clicked = True
+                    break
+            if not clicked:
+                # 如果找不到任何按钮，检查是否因为无服务器
+                page_text = sb.get_page_source().lower()
+                if 'you have no server' in page_text or 'no server' in page_text:
+                    print("⚠️ 账户无服务器，视为无需续期")
+                    return True, "无需续期"
+                return False, "未找到 Order now 按钮，且非无服务器情况"
+        except Exception as e2:
+            print(f"⚠️ 遍历按钮失败: {e2}")
+            return False, f"点击失败: {e2}"
 
-    # 最后备选：遍历所有按钮
-    try:
-        buttons = sb.find_elements('button')
-        for btn in buttons:
-            if btn is None:
-                continue
-            text = btn.text.strip().lower()
-            if 'order now' in text or 'order' in text:
-                sb.driver.execute_script("arguments[0].scrollIntoView({block: 'center'});", btn.webelement)
-                time.sleep(0.5)
-                sb.driver.execute_script("arguments[0].click();", btn.webelement)
-                print("✅ 通过遍历点击 Order now 成功")
-                return True, ""
-    except Exception as e:
-        print(f"⚠️ 遍历按钮失败: {e}")
+    # 点击后等待几秒，检查是否出现“无需续期”类提示
+    time.sleep(5)
+    page_text_after = sb.get_page_source().lower()
+    no_renewal_keywords = [
+        'not due for renewal',
+        'already renewed',
+        '无需续期',
+        '已续期',
+        'no server needs renewal',
+        'you have no server'
+    ]
+    if any(kw in page_text_after for kw in no_renewal_keywords):
+        print("✅ 点击 Order now 后检测到无需续期提示，视为成功")
+        return True, "无需续期"
 
-    return False, "未找到 Order now 按钮"
+    # 否则视为普通成功（后续由 check_renewal_success 检查续期成功标识）
+    return True, ""
 
 # ========== 检查续期结果 ==========
 def check_renewal_success(sb):
@@ -398,7 +406,7 @@ def main():
             send_tg(TG_BOT_TOKEN, TG_CHAT_ID, msg)
             return
 
-        time.sleep(3)  # 等待页面稳定
+        time.sleep(3)
         screenshot_step(sb, "extend_clicked")
 
         order_ok, order_msg = click_order_now(sb)
@@ -410,8 +418,13 @@ def main():
 
         screenshot_step(sb, "ordernow_clicked")
 
-        print("🔍 检查续期结果...")
-        renewal_success, renewal_msg = check_renewal_success(sb)
+        # 如果返回的是"无需续期"，直接视为成功
+        if order_msg == "无需续期":
+            renewal_success = True
+            renewal_msg = "服务器无需续期（未到期或已续期）"
+        else:
+            print("🔍 检查续期结果...")
+            renewal_success, renewal_msg = check_renewal_success(sb)
         screenshot_step(sb, "renewal_result")
 
         if renewal_success:
