@@ -78,16 +78,13 @@ def click_extend_button(sb):
 
 # ========== 点击 Order now（先点击，再检查无需续期） ==========
 def click_order_now(sb):
-    # 等待页面稳定
     time.sleep(5)
 
-    # 首选：button:contains("Order now")
     try:
         sb.click('button:contains("Order now")', timeout=10)
         print("✅ 点击 Order now 成功 (button:contains)")
     except Exception as e:
         print(f"⚠️ button:contains 失败: {e}")
-        # 备选：遍历所有按钮
         try:
             buttons = sb.find_elements('button')
             clicked = False
@@ -103,7 +100,6 @@ def click_order_now(sb):
                     clicked = True
                     break
             if not clicked:
-                # 如果找不到任何按钮，检查是否因为无服务器
                 page_text = sb.get_page_source().lower()
                 if 'you have no server' in page_text or 'no server' in page_text:
                     print("⚠️ 账户无服务器，视为无需续期")
@@ -113,7 +109,6 @@ def click_order_now(sb):
             print(f"⚠️ 遍历按钮失败: {e2}")
             return False, f"点击失败: {e2}"
 
-    # 点击后等待几秒，检查是否出现“无需续期”类提示
     time.sleep(5)
     page_text_after = sb.get_page_source().lower()
     no_renewal_keywords = [
@@ -128,7 +123,6 @@ def click_order_now(sb):
         print("✅ 点击 Order now 后检测到无需续期提示，视为成功")
         return True, "无需续期"
 
-    # 否则视为普通成功（后续由 check_renewal_success 检查续期成功标识）
     return True, ""
 
 # ========== 检查续期结果 ==========
@@ -175,21 +169,79 @@ def get_server_time_info(sb, refresh=False):
         print(f"⚠️ 获取服务器时间信息失败: {e}")
     return None
 
-# ========== 登录相关 ==========
+# ========== 登录相关（增强版，支持多选择器） ==========
 def perform_login_attempt(sb, email, password, attempt_number):
     print(f"\n🔄 登录尝试 {attempt_number}/2")
     print("🌐 打开登录页面...")
     sb.open(BASE_URL)
+    # 等待页面完全加载（最多30秒）
     sb.wait_for_ready_state_complete()
-    sb.sleep(1)
+    time.sleep(3)
     screenshot_step(sb, f"attempt_{attempt_number}_page_loaded")
 
+    # 尝试多种邮箱输入框选择器
+    email_selectors = [
+        '#login_form_email',
+        'input[type="email"]',
+        'input[name="email"]',
+        'input[placeholder*="email"]',
+        'input[placeholder*="Email"]',
+        'input[class*="email"]'
+    ]
+    email_input = None
+    for sel in email_selectors:
+        try:
+            email_input = sb.find_element(sel, timeout=3)
+            if email_input is not None:
+                print(f"✅ 找到邮箱输入框，选择器: {sel}")
+                break
+        except:
+            continue
+    if email_input is None:
+        print("❌ 未找到邮箱输入框，尝试刷新页面重试...")
+        sb.refresh()
+        time.sleep(5)
+        for sel in email_selectors:
+            try:
+                email_input = sb.find_element(sel, timeout=3)
+                if email_input is not None:
+                    print(f"✅ 刷新后找到邮箱输入框，选择器: {sel}")
+                    break
+            except:
+                continue
+        if email_input is None:
+            screenshot_step(sb, "email_input_not_found")
+            return False, "未找到邮箱输入框"
+
     print("📧 填写邮箱...")
-    sb.type('#login_form_email', email, timeout=10)
+    email_input.clear()
+    email_input.send_keys(email)
     screenshot_step(sb, f"attempt_{attempt_number}_email_filled")
 
+    # 密码框
+    password_selectors = [
+        '#login_form_password',
+        'input[type="password"]',
+        'input[name="password"]',
+        'input[placeholder*="password"]',
+        'input[placeholder*="Password"]'
+    ]
+    password_input = None
+    for sel in password_selectors:
+        try:
+            password_input = sb.find_element(sel, timeout=3)
+            if password_input is not None:
+                print(f"✅ 找到密码输入框，选择器: {sel}")
+                break
+        except:
+            continue
+    if password_input is None:
+        print("❌ 未找到密码输入框")
+        return False, "未找到密码输入框"
+
     print("🔑 填写密码...")
-    sb.type('#login_form_password', password, timeout=10)
+    password_input.clear()
+    password_input.send_keys(password)
     screenshot_step(sb, f"attempt_{attempt_number}_password_filled")
 
     print("⏳ 等待60秒，确保 Turnstile 验证码完全加载...")
@@ -209,10 +261,30 @@ def perform_login_attempt(sb, email, password, attempt_number):
     screenshot_step(sb, f"attempt_{attempt_number}_after_6s_wait")
 
     print("🔑 点击登录按钮...")
-    sb.uc_click('button:contains("Sign in")')
+    # 登录按钮选择器
+    login_btn_selectors = [
+        'button:contains("Sign in")',
+        'button[type="submit"]',
+        'button:contains("Login")',
+        'button:contains("登录")'
+    ]
+    clicked = False
+    for sel in login_btn_selectors:
+        try:
+            sb.click(sel, timeout=5)
+            clicked = True
+            print(f"✅ 点击登录按钮成功，选择器: {sel}")
+            break
+        except:
+            continue
+    if not clicked:
+        print("❌ 未找到登录按钮")
+        return False, "未找到登录按钮"
+
     screenshot_step(sb, f"attempt_{attempt_number}_login_clicked")
     sb.sleep(5)
 
+    # 等待跳转
     for i in range(30):
         current_url = sb.get_current_url()
         page_title = sb.get_title() or ""
@@ -250,10 +322,6 @@ def login(sb, email, password):
 
 # ========== 调度：分别创建/更新 20min 和 10min 两个任务 ==========
 def schedule_via_cronjob(trigger_timestamp, gh_token, repo, workflow_id, api_key, branch="main", minutes_before=20):
-    """
-    为指定的触发时间创建或更新 cron-job。
-    使用 title 区分不同任务（如 "TheRose Renew 20min"）。
-    """
     dt = datetime.fromtimestamp(trigger_timestamp)
     schedule = {
         "minutes": [dt.minute],
@@ -297,17 +365,14 @@ def schedule_via_cronjob(trigger_timestamp, gh_token, repo, workflow_id, api_key
     print(f"📤 调度任务 '{job_title}'，触发时间: {dt}")
 
     try:
-        # 1. 获取所有现有任务
         resp = requests.get("https://api.cron-job.org/jobs", headers=headers, timeout=30)
         resp.raise_for_status()
         jobs_data = resp.json()
         jobs = jobs_data.get("jobs", [])
         print(f"📋 现有任务数量: {len(jobs)}")
 
-        # 查找与 job_title 匹配的任务（精确匹配）
         matching_jobs = [j for j in jobs if j.get("title") == job_title]
 
-        # 删除多余的匹配任务（只保留第一个）
         for job in matching_jobs[1:]:
             job_id = job.get("jobId")
             if job_id:
@@ -323,7 +388,7 @@ def schedule_via_cronjob(trigger_timestamp, gh_token, repo, workflow_id, api_key
             update_resp = requests.patch(
                 f"https://api.cron-job.org/jobs/{job_id}",
                 headers=headers,
-                json=payload,  # 完整 payload
+                json=payload,
                 timeout=30
             )
             if update_resp.status_code == 200:
@@ -418,7 +483,6 @@ def main():
 
         screenshot_step(sb, "ordernow_clicked")
 
-        # 如果返回的是"无需续期"，直接视为成功
         if order_msg == "无需续期":
             renewal_success = True
             renewal_msg = "服务器无需续期（未到期或已续期）"
@@ -453,7 +517,6 @@ def main():
 
         send_tg(TG_BOT_TOKEN, TG_CHAT_ID, msg)
 
-        # ========== 调度：创建两个任务（20分钟和10分钟） ==========
         should_schedule = (renewal_success or FORCE_SCHEDULE) and expiry_time_utc_str is not None
 
         if should_schedule:
@@ -470,7 +533,6 @@ def main():
             if not all([GH_TOKEN, GH_REPO, GH_WORKFLOW_ID, CRONJOB_API_KEY]):
                 print("⚠️ 缺少必要的环境变量，跳过调度")
             else:
-                # 两个时间：20分钟和10分钟
                 time_points = [20, 10]
                 for minutes_before in time_points:
                     trigger_ts = expiry_ts - (minutes_before * 60)
@@ -483,7 +545,7 @@ def main():
                             print(f"✅ 已安排 {minutes_before} 分钟后触发")
                         else:
                             print(f"❌ 安排 {minutes_before} 分钟后触发失败")
-                        time.sleep(2)  # 避免 API 限流
+                        time.sleep(2)
                     else:
                         print(f"⚠️ 触发时间 {datetime.fromtimestamp(trigger_ts)} 已过期或太近，跳过")
         else:
