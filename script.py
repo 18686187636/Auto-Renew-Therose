@@ -100,9 +100,39 @@ def click_extend_button(sb):
     except Exception as e:
         return False, {"error": str(e)}
 
-# ========== 点击 Order now（仅点击） ==========
+# ========== 处理 Consent 弹窗 ==========
+def handle_consent_popup(sb):
+    """尝试点击 Consent 弹窗按钮（如果有的话）"""
+    consent_selectors = [
+        'button:contains("Consent")',
+        'button:contains("同意")',
+        'button:contains("Accept")',
+        'button:contains("I agree")',
+        'button:contains("I Accept")',
+        'button[data-action="consent"]',
+        '.consent-button',
+        '#consent-button'
+    ]
+    for sel in consent_selectors:
+        try:
+            elem = sb.find_element(sel, timeout=2)
+            if elem is not None:
+                print(f"🔘 找到 Consent 弹窗按钮，选择器: {sel}")
+                sb.click(sel)
+                print("✅ 已点击 Consent 按钮")
+                time.sleep(1)  # 等待弹窗关闭
+                return True
+        except:
+            continue
+    return False
+
+# ========== 点击 Order now（含弹窗处理） ==========
 def click_order_now(sb):
-    """只负责点击 Order now 按钮，不进行结果判断"""
+    """点击 Order now 按钮，先处理可能存在的 Consent 弹窗"""
+    # 先尝试处理弹窗
+    handle_consent_popup(sb)
+
+    # 尝试点击 Order now
     try:
         sb.click('button:contains("Order now")', timeout=10)
         print("✅ 点击 Order now 成功 (button:contains)")
@@ -125,12 +155,21 @@ def click_order_now(sb):
                     clicked = True
                     break
             if not clicked:
+                # 可能弹窗又出现了，再处理一次并重试
+                if handle_consent_popup(sb):
+                    # 再次尝试点击
+                    try:
+                        sb.click('button:contains("Order now")', timeout=5)
+                        print("✅ 再次点击 Order now 成功")
+                        return True, ""
+                    except:
+                        pass
                 return False, "未找到 Order now 按钮"
             return True, ""
         except Exception as e2:
             return False, f"点击失败: {e2}"
 
-# ========== 检查续期结果（新函数） ==========
+# ========== 检查续期结果（智能识别成功/30分钟限制/错误） ==========
 def check_renewal_result(sb):
     """
     检查页面上的 alert 信息，返回 (状态, 消息)
@@ -456,13 +495,11 @@ def main():
             msg = f"{base_header}\n\n❌ 登录失败，请检查账号密码、代理或网络\nhttps://therose.cloud/"
             print(msg)
             send_tg_text(TG_BOT_TOKEN, TG_CHAT_ID, msg)
-            # 发送登录失败截图
-            login_fail_img = "login_failed_attempt_2.png"  # 或其他已保存的截图
+            login_fail_img = "login_failed_attempt_2.png"
             if os.path.exists(login_fail_img):
                 send_tg_photo(TG_BOT_TOKEN, TG_CHAT_ID, login_fail_img, caption="登录失败截图")
             return
 
-        # 登录成功后发送截图（可选）
         login_success_img = screenshot_step(sb, "login_success")
         if login_success_img:
             send_tg_photo(TG_BOT_TOKEN, TG_CHAT_ID, login_success_img, caption="✅ 登录成功")
@@ -499,7 +536,7 @@ def main():
         time.sleep(3)
         screenshot_step(sb, "extend_clicked")
 
-        # 点击 Order now
+        # 点击 Order now（内含弹窗处理）
         order_ok, order_err = click_order_now(sb)
         if not order_ok:
             msg = f"{base_header}\n\n❌ 点击 Order now 失败: {order_err}{time_info}{url_line}"
@@ -512,7 +549,6 @@ def main():
         # ---------- 检查续期结果 ----------
         status, result_msg = check_renewal_result(sb)
 
-        # 根据状态判定续期是否成功（或无需续期）
         if status in ("success", "no_need"):
             renewal_success = True
             renewal_msg = result_msg
@@ -520,13 +556,10 @@ def main():
             renewal_success = False
             renewal_msg = result_msg
 
-        # 截图并发送 Telegram 图片
         result_img = screenshot_step(sb, "renewal_result")
         if result_img:
-            caption = f"续期结果: {renewal_msg}"
-            send_tg_photo(TG_BOT_TOKEN, TG_CHAT_ID, result_img, caption)
+            send_tg_photo(TG_BOT_TOKEN, TG_CHAT_ID, result_img, caption=f"续期结果: {renewal_msg}")
 
-        # 如果续期成功（包括无需续期），则尝试刷新获取最新到期时间
         if renewal_success:
             print("✅ 续期成功（或无需续期），重新获取最新到期时间...")
             new_expiry_utc_str = get_server_time_info(sb, refresh=True)
@@ -542,7 +575,6 @@ def main():
         else:
             print("ℹ️ 续期未成功，不重新获取时间")
 
-        # 构造最终消息并发送文本通知
         if renewal_success:
             msg = f"{base_header}\n\n✅ 续期成功！{renewal_msg}{time_info}{url_line}"
             print(msg)
