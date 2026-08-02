@@ -67,16 +67,24 @@ def get_current_ip(proxy_server=None):
 def get_beijing_time():
     return (datetime.utcnow() + timedelta(hours=8)).strftime("%Y-%m-%d %H:%M:%S")
 
-# ========== 点击 Extend 按钮 ==========
+# ========== 点击 Extend 按钮（采用类选择器 + 文本回退） ==========
 def click_extend_button(sb):
+    # 首选：使用精确的类选择器 + 文本过滤（确保点击正确的 Extend）
     try:
-        sb.click('span:contains("Extend")', timeout=3)
-        print("✅ 点击 Extend 成功")
+        sb.click('a.btn.secondary.w-100.d-flex.align-items-center.justify-content-center:contains("Extend")', timeout=5)
+        print("✅ 点击 Extend 成功 (类+文本)")
         return True, {}
-    except Exception as e:
-        return False, {"error": str(e)}
+    except Exception as e1:
+        print(f"⚠️ 类+文本方式失败: {e1}")
+        # 备选：使用原有 span:contains 方法
+        try:
+            sb.click('span:contains("Extend")', timeout=3)
+            print("✅ 点击 Extend 成功 (备用文本方式)")
+            return True, {}
+        except Exception as e2:
+            return False, {"error": f"两种方式均失败: {e2}"}
 
-# ========== 点击 Order now（去掉 ID 尝试，仅使用 button:contains 并增加延时） ==========
+# ========== 点击 Order now（保持原逻辑，可后续优化） ==========
 def click_order_now(sb):
     # 增加固定延时 5 秒，确保页面稳定
     time.sleep(5)
