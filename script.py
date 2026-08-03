@@ -97,12 +97,12 @@ def click_extend_button(sb):
     except Exception as e:
         return False, {"error": str(e)}
 
-# ========== 处理 Consent 弹窗 ==========
+# ========== 处理 Consent 弹窗（支持 Accept / Consent） ==========
 def handle_consent_popup(sb):
     consent_selectors = [
         'button:contains("Consent")',
-        'button:contains("同意")',
         'button:contains("Accept")',
+        'button:contains("同意")',
         'button:contains("I agree")',
         'button:contains("I Accept")',
         'button[data-action="consent"]',
@@ -126,9 +126,8 @@ def handle_consent_popup(sb):
 def close_ad_popup(sb):
     """
     关闭续期页面上的广告弹窗（如 "Watch an advertisement to access the site"）。
-    尝试多种关闭按钮选择器，或直接移除遮挡元素。
     """
-    # 1. 尝试点击关闭按钮
+    # 1. 尝试点击关闭按钮（多种选择器）
     close_selectors = [
         'button:contains("×")',
         'button:contains("Close")',
@@ -151,15 +150,11 @@ def close_ad_popup(sb):
         except:
             continue
 
-    # 2. 如果找不到关闭按钮，尝试通过文本定位并点击其父元素中的关闭按钮
+    # 2. 如果找不到关闭按钮，尝试通过文本定位并移除广告容器
     try:
-        # 查找包含 "Watch an advertisement" 的元素
         ad_elem = sb.find_element('*:contains("Watch an advertisement")', timeout=2)
         if ad_elem:
-            # 尝试在其父级中找关闭按钮
-            parent = ad_elem.find_element_by_xpath('..')  # 使用 xpath 或通过 js 处理
-            # 但 seleniumbase 可能不支持直接 xpath 查找，我们使用 JavaScript 移除整个弹窗
-            print("⚠️ 找到广告文本，尝试使用 JavaScript 移除弹窗...")
+            print("⚠️ 找到广告文本，使用 JavaScript 移除弹窗...")
             sb.driver.execute_script("""
                 var elems = document.querySelectorAll('div, section, article');
                 for(var i=0; i<elems.length; i++) {
@@ -177,22 +172,22 @@ def close_ad_popup(sb):
     except:
         pass
 
-    # 3. 若仍无法关闭，尝试刷新页面（可能广告只出现一次）
+    # 3. 若仍无法关闭，刷新页面（广告可能只出现一次）
     print("⚠️ 无法关闭广告，尝试刷新页面...")
     sb.refresh()
     time.sleep(3)
     return False
 
-# ========== 点击 Order now（增强版：关闭广告 + 显式等待） ==========
+# ========== 点击 Order now（直接使用 ID 选择器） ==========
 def click_order_now(sb):
     """
-    处理 Consent 弹窗，然后关闭可能的广告弹窗，最后点击 Order now。
+    处理 Consent 弹窗，关闭广告弹窗，然后使用 ID 选择器点击 Order now。
     """
     # 1. 处理 Consent
     consent_clicked = handle_consent_popup(sb)
     if consent_clicked:
         print("⏳ 等待页面跳转（Consent 已点击）...")
-        time.sleep(5)  # 等待跳转
+        time.sleep(5)
     else:
         print("ℹ️ 未检测到 Consent 弹窗，继续...")
 
@@ -200,7 +195,7 @@ def click_order_now(sb):
     print("🔍 检查并关闭广告弹窗...")
     close_ad_popup(sb)
 
-    # 3. 确保页面完全加载
+    # 3. 等待续期页面加载
     try:
         sb.wait_for_element_present('*:contains("Renew your server")', timeout=10)
         print("✅ 续期页面已加载")
@@ -213,78 +208,35 @@ def click_order_now(sb):
     print(f"📍 当前 URL: {current_url}")
     print(f"📄 页面标题: {page_title}")
 
-    # 5. 多选择器（涵盖 button、a、input）
-    order_selectors = [
-        'button:contains("Order now")',
-        'button:contains("Order Now")',
-        'a:contains("Order now")',
-        'a:contains("Order Now")',
-        'button:contains("Order")',
-        'a:contains("Order")',
-        'input[type="submit"][value*="Order"]',
-        'input[type="submit"][value*="order"]',
-        '.btn-primary:contains("Order")',
-        '.btn-success:contains("Order")'
-    ]
-
-    # 6. 使用显式等待依次尝试选择器
-    for sel in order_selectors:
-        try:
-            elem = sb.wait_for_element_present(sel, timeout=5)
-            if elem:
-                sb.driver.execute_script("arguments[0].scrollIntoView({block: 'center', behavior: 'smooth'});", elem.webelement)
-                time.sleep(0.5)
-                sb.driver.execute_script("arguments[0].click();", elem.webelement)
-                print(f"✅ 点击 Order now 成功，选择器: {sel}")
-                return True, ""
-        except Exception as e:
-            # 单个选择器失败，继续尝试下一个
-            continue
-
-    # 7. 若所有选择器均失败，尝试遍历所有 button 和 a（兜底）
+    # 5. 直接使用用户提供的 ID 选择器（最稳定）
+    order_selector = 'button#order-submit'
     try:
-        print("🔄 使用最终兜底方案：遍历所有按钮/链接...")
-        elements = sb.find_elements('button') + sb.find_elements('a')
-        for elem in elements:
-            if elem is None:
-                continue
-            text = elem.text.strip().lower()
-            keywords = ['order now', 'order', 'renew', '续期', '购买']
-            if any(k in text for k in keywords):
-                sb.driver.execute_script("arguments[0].scrollIntoView({block: 'center'});", elem.webelement)
-                time.sleep(0.5)
-                sb.driver.execute_script("arguments[0].click();", elem.webelement)
-                print(f"✅ 通过遍历点击成功，文本: {text}")
-                return True, ""
-        # 尝试 input 提交按钮
-        inputs = sb.find_elements('input[type="submit"]')
-        for inp in inputs:
-            if inp is None:
-                continue
-            value = inp.get_attribute("value") or ""
-            if any(k in value.lower() for k in ['order', 'renew', '续期', '购买']):
-                sb.driver.execute_script("arguments[0].scrollIntoView({block: 'center'});", inp.webelement)
-                time.sleep(0.5)
-                sb.driver.execute_script("arguments[0].click();", inp.webelement)
-                print(f"✅ 通过 input 类型点击成功，value: {value}")
-                return True, ""
+        # 等待按钮出现（最多 10 秒）
+        elem = sb.wait_for_element_present(order_selector, timeout=10)
+        if elem:
+            # 滚动到按钮并点击
+            sb.driver.execute_script("arguments[0].scrollIntoView({block: 'center', behavior: 'smooth'});", elem.webelement)
+            time.sleep(0.5)
+            sb.driver.execute_script("arguments[0].click();", elem.webelement)
+            print(f"✅ 点击 Order now 成功，选择器: {order_selector}")
+            return True, ""
     except Exception as e:
-        print(f"⚠️ 遍历元素失败: {e}")
-        # 如果发生连接错误，尝试刷新页面再试一次
-        try:
-            print("🔄 尝试刷新页面后再次查找...")
-            sb.refresh()
-            time.sleep(5)
-            # 再次尝试点击（直接使用第一个选择器）
-            elem = sb.find_element('button:contains("Order now")', timeout=5)
-            if elem:
-                sb.driver.execute_script("arguments[0].scrollIntoView({block: 'center'});", elem.webelement)
-                time.sleep(0.5)
-                sb.driver.execute_script("arguments[0].click();", elem.webelement)
-                print("✅ 刷新后点击 Order now 成功")
-                return True, ""
-        except:
-            pass
+        print(f"⚠️ 使用 ID 选择器点击失败: {e}")
+
+    # 6. 如果失败，尝试刷新页面并重试一次
+    try:
+        print("🔄 刷新页面并重试...")
+        sb.refresh()
+        time.sleep(5)
+        elem = sb.wait_for_element_present(order_selector, timeout=10)
+        if elem:
+            sb.driver.execute_script("arguments[0].scrollIntoView({block: 'center', behavior: 'smooth'});", elem.webelement)
+            time.sleep(0.5)
+            sb.driver.execute_script("arguments[0].click();", elem.webelement)
+            print(f"✅ 刷新后点击 Order now 成功")
+            return True, ""
+    except Exception as e:
+        print(f"⚠️ 刷新后重试仍失败: {e}")
 
     # 全部失败，保存截图并发送
     fail_img = screenshot_step(sb, "order_now_not_found")
@@ -337,7 +289,7 @@ def get_server_time_info(sb, refresh=False):
         print(f"⚠️ 获取服务器时间信息失败: {e}")
     return None
 
-# ========== 登录 ==========
+# ========== 登录（保持不变） ==========
 def perform_login_attempt(sb, email, password, attempt_number):
     print(f"\n🔄 登录尝试 {attempt_number}/2")
     print("🌐 打开登录页面...")
@@ -483,7 +435,7 @@ def login(sb, email, password):
             return True, url
     return False, sb.get_current_url()
 
-# ========== 调度（cron-job.org） ==========
+# ========== 调度（cron-job.org，保持不变） ==========
 def schedule_via_cronjob(trigger_timestamp, gh_token, repo, workflow_id, api_key, branch="main", minutes_before=20):
     dt = datetime.fromtimestamp(trigger_timestamp)
     schedule = {
@@ -646,7 +598,7 @@ def main():
         time.sleep(3)
         screenshot_step(sb, "extend_clicked")
 
-        # 点击 Order now（内部处理 Consent、关闭广告、重试）
+        # 点击 Order now（使用 ID 选择器）
         order_ok, order_err = click_order_now(sb)
         if not order_ok:
             msg = f"{base_header}\n\n❌ 点击 Order now 失败: {order_err}{time_info}{url_line}"
