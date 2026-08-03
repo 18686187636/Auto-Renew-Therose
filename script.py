@@ -88,7 +88,7 @@ def get_current_ip(proxy_server=None):
 def get_beijing_time():
     return (datetime.utcnow() + timedelta(hours=8)).strftime("%Y-%m-%d %H:%M:%S")
 
-# ========== 点击 Extend ==========
+# ========== 点击 Extend（主流程用） ==========
 def click_extend_button(sb):
     try:
         sb.click('span:contains("Extend")', timeout=3)
@@ -122,26 +122,40 @@ def handle_consent_popup(sb):
             continue
     return False
 
-# ========== 点击 Order now（极致增强版） ==========
+# ========== 再次点击 Extend（用于激活 Order now） ==========
+def click_extend_again(sb):
+    try:
+        sb.click('span:contains("Extend")', timeout=5)
+        print("✅ 再次点击 Extend 成功")
+        return True
+    except Exception as e:
+        print(f"⚠️ 再次点击 Extend 失败: {e}")
+        return False
+
+# ========== 点击 Order now（增强版，包含再次点击 Extend） ==========
 def click_order_now(sb):
     """
-    处理 Consent 弹窗，并智能查找 Order now 按钮，支持重试和调试截图。
+    处理 Consent 弹窗，然后再次点击 Extend 以激活 Order now 按钮，最后查找并点击 Order now。
     """
     # 1. 处理 Consent
     consent_clicked = handle_consent_popup(sb)
     if consent_clicked:
         print("⏳ 等待页面加载（Consent 已点击）...")
-        time.sleep(8)  # 增加初始等待
+        time.sleep(5)
+        # 2. 再次点击 Extend（关键步骤）
+        print("🔄 再次点击 Extend 按钮以激活续期选项...")
+        click_extend_again(sb)
+        time.sleep(3)  # 等待按钮出现
     else:
         print("ℹ️ 未检测到 Consent 弹窗，继续查找 Order now...")
 
-    # 2. 打印当前状态
+    # 3. 打印当前状态
     current_url = sb.get_current_url()
     page_title = sb.get_title() or ""
     print(f"📍 当前 URL: {current_url}")
     print(f"📄 页面标题: {page_title}")
 
-    # 3. 多选择器列表（涵盖各种可能）
+    # 4. 多选择器列表（涵盖各种可能）
     order_selectors = [
         'button:contains("Order now")',
         'button:contains("Order Now")',
@@ -158,13 +172,12 @@ def click_order_now(sb):
         'a:contains("Renew")'
     ]
 
-    # 4. 多次重试
-    for attempt in range(5):  # 尝试 5 次
+    # 5. 多次重试
+    for attempt in range(5):
         for sel in order_selectors:
             try:
                 elem = sb.find_element(sel, timeout=3)
                 if elem is not None:
-                    # 滚动到元素并点击
                     sb.driver.execute_script("arguments[0].scrollIntoView({block: 'center', behavior: 'smooth'});", elem.webelement)
                     time.sleep(0.5)
                     sb.driver.execute_script("arguments[0].click();", elem.webelement)
@@ -173,12 +186,11 @@ def click_order_now(sb):
             except:
                 continue
 
-        # 如果未找到，等待后重试
         if attempt < 4:
             print(f"⏳ 未找到 Order now 按钮，等待 5 秒后重试 ({attempt+1}/5)...")
             time.sleep(5)
 
-    # 5. 最终兜底：遍历所有 button
+    # 6. 最终兜底：遍历所有 button 和 input
     try:
         print("🔄 使用最终兜底方案：遍历所有按钮...")
         buttons = sb.find_elements('button')
@@ -186,7 +198,6 @@ def click_order_now(sb):
             if btn is None:
                 continue
             text = btn.text.strip().lower()
-            # 检查关键词
             keywords = ['order', 'renew', '续期', '购买', 'now']
             if any(k in text for k in keywords):
                 sb.driver.execute_script("arguments[0].scrollIntoView({block: 'center'});", btn.webelement)
@@ -194,7 +205,6 @@ def click_order_now(sb):
                 sb.driver.execute_script("arguments[0].click();", btn.webelement)
                 print(f"✅ 通过遍历点击按钮成功，文本: {text}")
                 return True, ""
-        # 再尝试找 input 类型按钮
         inputs = sb.find_elements('input[type="submit"]')
         for inp in inputs:
             if inp is None:
@@ -209,7 +219,7 @@ def click_order_now(sb):
     except Exception as e:
         print(f"⚠️ 遍历按钮失败: {e}")
 
-    # 全部失败，保存截图以便调试
+    # 全部失败，保存截图
     fail_img = screenshot_step(sb, "order_now_not_found")
     if fail_img:
         send_tg_photo(TG_BOT_TOKEN, TG_CHAT_ID, fail_img, caption="❌ 未找到 Order now 按钮，请查看截图")
@@ -260,7 +270,7 @@ def get_server_time_info(sb, refresh=False):
         print(f"⚠️ 获取服务器时间信息失败: {e}")
     return None
 
-# ========== 登录（不变） ==========
+# ========== 登录（保持不变） ==========
 def perform_login_attempt(sb, email, password, attempt_number):
     print(f"\n🔄 登录尝试 {attempt_number}/2")
     print("🌐 打开登录页面...")
@@ -406,7 +416,7 @@ def login(sb, email, password):
             return True, url
     return False, sb.get_current_url()
 
-# ========== 调度（不变） ==========
+# ========== 调度（保持不变） ==========
 def schedule_via_cronjob(trigger_timestamp, gh_token, repo, workflow_id, api_key, branch="main", minutes_before=20):
     dt = datetime.fromtimestamp(trigger_timestamp)
     schedule = {
@@ -557,7 +567,7 @@ def main():
 
         url_line = "\nhttps://therose.cloud/"
 
-        # 续期
+        # 第一次点击 Extend（触发弹窗）
         print("📄 开始续期流程...")
         ok, info = click_extend_button(sb)
         if not ok:
@@ -569,13 +579,12 @@ def main():
         time.sleep(3)
         screenshot_step(sb, "extend_clicked")
 
-        # 点击 Order now（增强版，失败自动发送截图）
+        # 调用 click_order_now，内部会处理 Consent、再次点击 Extend，然后点击 Order now
         order_ok, order_err = click_order_now(sb)
         if not order_ok:
             msg = f"{base_header}\n\n❌ 点击 Order now 失败: {order_err}{time_info}{url_line}"
             print(msg)
             send_tg_text(TG_BOT_TOKEN, TG_CHAT_ID, msg)
-            # 已在 click_order_now 中发送截图，此处不再重复
             return
 
         screenshot_step(sb, "ordernow_clicked")
