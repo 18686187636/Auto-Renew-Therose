@@ -92,7 +92,7 @@ def get_current_ip(proxy_server=None):
 def get_beijing_time():
     return (datetime.utcnow() + timedelta(hours=8)).strftime("%Y-%m-%d %H:%M:%S")
 
-# ========== 登录（保持不变） ==========
+# ========== 登录 ==========
 def perform_login_attempt(sb, email, password, attempt_number):
     print(f"\n🔄 登录尝试 {attempt_number}/2")
     print("🌐 打开登录页面...")
@@ -435,16 +435,9 @@ def main():
         f"🕐 当前北京时间: {beijing_time}"
     )
 
-    # Chrome 参数（提高 headless 模式稳定性）
-    chrome_args = [
-        "--no-sandbox",
-        "--disable-dev-shm-usage",
-        "--disable-gpu",
-        "--window-size=1920,1080"
-    ]
-
+    # 直接使用 SB，不添加额外参数（默认 headless 已足够）
     with SB(uc=True, headless=True, proxy=PROXY_SERVER or None,
-            page_load_strategy='eager', chrome_args=chrome_args) as sb:
+            page_load_strategy='eager') as sb:
         try:
             sb.driver.set_page_load_timeout(120)
             sb.driver.set_script_timeout(120)
