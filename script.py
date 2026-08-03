@@ -22,6 +22,10 @@ GH_WORKFLOW_ID = os.environ.get("GH_WORKFLOW_ID") or ""
 
 FORCE_SCHEDULE = os.environ.get("FORCE_SCHEDULE", "false").lower() == "true"
 
+# 续期页面 ID，默认 2635，可通过环境变量覆盖
+SERVER_RENEW_ID = os.environ.get("SERVER_RENEW_ID", "2635")
+RENEW_URL = f"https://client.therose.cloud/panel?routeName=cart_renew&id={SERVER_RENEW_ID}"
+
 BASE_URL = "https://client.therose.cloud/login"
 
 if not EMAIL or not PASSWORD:
@@ -88,7 +92,7 @@ def get_current_ip(proxy_server=None):
 def get_beijing_time():
     return (datetime.utcnow() + timedelta(hours=8)).strftime("%Y-%m-%d %H:%M:%S")
 
-# ========== 点击 Extend（主流程用） ==========
+# ========== 点击 Extend ==========
 def click_extend_button(sb):
     try:
         sb.click('span:contains("Extend")', timeout=3)
@@ -97,37 +101,12 @@ def click_extend_button(sb):
     except Exception as e:
         return False, {"error": str(e)}
 
-# ========== 处理 Consent 弹窗（支持 Accept / Consent） ==========
-def handle_consent_popup(sb):
-    consent_selectors = [
-        'button:contains("Consent")',
-        'button:contains("Accept")',
-        'button:contains("同意")',
-        'button:contains("I agree")',
-        'button:contains("I Accept")',
-        'button[data-action="consent"]',
-        '.consent-button',
-        '#consent-button'
-    ]
-    for sel in consent_selectors:
-        try:
-            elem = sb.find_element(sel, timeout=2)
-            if elem is not None:
-                print(f"🔘 找到 Consent 弹窗按钮，选择器: {sel}")
-                sb.click(sel)
-                print("✅ 已点击 Consent 按钮")
-                time.sleep(2)
-                return True
-        except:
-            continue
-    return False
-
-# ========== 处理广告弹窗 ==========
+# ========== 关闭广告弹窗 ==========
 def close_ad_popup(sb):
     """
     关闭续期页面上的广告弹窗（如 "Watch an advertisement to access the site"）。
     """
-    # 1. 尝试点击关闭按钮（多种选择器）
+    # 1. 尝试点击关闭按钮
     close_selectors = [
         'button:contains("×")',
         'button:contains("Close")',
@@ -150,7 +129,7 @@ def close_ad_popup(sb):
         except:
             continue
 
-    # 2. 如果找不到关闭按钮，尝试通过文本定位并移除广告容器
+    # 2. 尝试通过文本定位并移除
     try:
         ad_elem = sb.find_element('*:contains("Watch an advertisement")', timeout=2)
         if ad_elem:
@@ -178,18 +157,16 @@ def close_ad_popup(sb):
     time.sleep(3)
     return False
 
-# ========== 点击 Order now（直接使用 ID 选择器） ==========
+# ========== 点击 Order now（直接访问续期页面，避免 Consent 弹窗） ==========
 def click_order_now(sb):
     """
-    处理 Consent 弹窗，关闭广告弹窗，然后使用 ID 选择器点击 Order now。
+    直接打开续期订单页，关闭广告，然后点击 Order now。
+    避免因 Consent 弹窗导致的 WebDriver 会话中断。
     """
-    # 1. 处理 Consent
-    consent_clicked = handle_consent_popup(sb)
-    if consent_clicked:
-        print("⏳ 等待页面跳转（Consent 已点击）...")
-        time.sleep(5)
-    else:
-        print("ℹ️ 未检测到 Consent 弹窗，继续...")
+    # 1. 直接打开续期页面
+    print(f"🌐 直接打开续期页面: {RENEW_URL}")
+    sb.open(RENEW_URL)
+    time.sleep(3)
 
     # 2. 关闭广告弹窗（若有）
     print("🔍 检查并关闭广告弹窗...")
@@ -208,22 +185,20 @@ def click_order_now(sb):
     print(f"📍 当前 URL: {current_url}")
     print(f"📄 页面标题: {page_title}")
 
-    # 5. 直接使用用户提供的 ID 选择器（最稳定）
+    # 5. 使用 ID 选择器点击 Order now
     order_selector = 'button#order-submit'
     try:
-        # 等待按钮出现（最多 10 秒）
         elem = sb.wait_for_element_present(order_selector, timeout=10)
         if elem:
-            # 滚动到按钮并点击
             sb.driver.execute_script("arguments[0].scrollIntoView({block: 'center', behavior: 'smooth'});", elem.webelement)
             time.sleep(0.5)
             sb.driver.execute_script("arguments[0].click();", elem.webelement)
             print(f"✅ 点击 Order now 成功，选择器: {order_selector}")
             return True, ""
     except Exception as e:
-        print(f"⚠️ 使用 ID 选择器点击失败: {e}")
+        print(f"⚠️ 点击 Order now 失败: {e}")
 
-    # 6. 如果失败，尝试刷新页面并重试一次
+    # 6. 若失败，刷新页面重试一次
     try:
         print("🔄 刷新页面并重试...")
         sb.refresh()
@@ -233,7 +208,7 @@ def click_order_now(sb):
             sb.driver.execute_script("arguments[0].scrollIntoView({block: 'center', behavior: 'smooth'});", elem.webelement)
             time.sleep(0.5)
             sb.driver.execute_script("arguments[0].click();", elem.webelement)
-            print(f"✅ 刷新后点击 Order now 成功")
+            print("✅ 刷新后点击 Order now 成功")
             return True, ""
     except Exception as e:
         print(f"⚠️ 刷新后重试仍失败: {e}")
@@ -241,7 +216,7 @@ def click_order_now(sb):
     # 全部失败，保存截图并发送
     fail_img = screenshot_step(sb, "order_now_not_found")
     if fail_img:
-        send_tg_photo(TG_BOT_TOKEN, TG_CHAT_ID, fail_img, caption="❌ 未找到 Order now 按钮，请查看截图")
+        send_tg_photo(TG_BOT_TOKEN, TG_CHAT_ID, fail_img, caption="❌ 未找到 Order now 按钮")
     return False, "未找到 Order now 按钮"
 
 # ========== 检查续期结果 ==========
@@ -598,7 +573,7 @@ def main():
         time.sleep(3)
         screenshot_step(sb, "extend_clicked")
 
-        # 点击 Order now（使用 ID 选择器）
+        # 点击 Order now（直接访问续期页面，避免 Consent 弹窗）
         order_ok, order_err = click_order_now(sb)
         if not order_ok:
             msg = f"{base_header}\n\n❌ 点击 Order now 失败: {order_err}{time_info}{url_line}"
