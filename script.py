@@ -30,7 +30,6 @@ if not EMAIL or not PASSWORD:
 
 # ========== 辅助函数 ==========
 def screenshot_step(sb, step_name):
-    """保存截图并返回文件名"""
     timestamp = int(time.time() * 1000)
     filename = f"step_{step_name}_{timestamp}.png"
     try:
@@ -42,7 +41,6 @@ def screenshot_step(sb, step_name):
         return None
 
 def send_tg_text(token, chat_id, message):
-    """发送文本消息到 Telegram"""
     if not token or not chat_id:
         return
     url = f"https://api.telegram.org/bot{token}/sendMessage"
@@ -56,7 +54,6 @@ def send_tg_text(token, chat_id, message):
         print(f"❌ Telegram 发送异常: {e}")
 
 def send_tg_photo(token, chat_id, photo_path, caption=""):
-    """发送本地图片到 Telegram"""
     if not token or not chat_id:
         return
     if not photo_path or not os.path.exists(photo_path):
@@ -91,7 +88,7 @@ def get_current_ip(proxy_server=None):
 def get_beijing_time():
     return (datetime.utcnow() + timedelta(hours=8)).strftime("%Y-%m-%d %H:%M:%S")
 
-# ========== 点击 Extend 按钮 ==========
+# ========== 点击 Extend ==========
 def click_extend_button(sb):
     try:
         sb.click('span:contains("Extend")', timeout=3)
@@ -102,7 +99,6 @@ def click_extend_button(sb):
 
 # ========== 处理 Consent 弹窗 ==========
 def handle_consent_popup(sb):
-    """尝试点击 Consent 弹窗按钮（如果有的话）"""
     consent_selectors = [
         'button:contains("Consent")',
         'button:contains("同意")',
@@ -120,64 +116,81 @@ def handle_consent_popup(sb):
                 print(f"🔘 找到 Consent 弹窗按钮，选择器: {sel}")
                 sb.click(sel)
                 print("✅ 已点击 Consent 按钮")
-                time.sleep(1)  # 等待弹窗关闭
+                time.sleep(2)  # 增加等待，让页面更新
                 return True
         except:
             continue
     return False
 
-# ========== 点击 Order now（含弹窗处理） ==========
+# ========== 点击 Order now（增强版） ==========
 def click_order_now(sb):
-    """点击 Order now 按钮，先处理可能存在的 Consent 弹窗"""
-    # 先尝试处理弹窗
-    handle_consent_popup(sb)
+    """
+    处理 Consent 弹窗，并等待 Order now 按钮出现，支持多选择器和滚动。
+    """
+    # 1. 先处理 Consent 弹窗
+    consent_clicked = handle_consent_popup(sb)
+    if consent_clicked:
+        print("⏳ 等待页面加载（Consent 已点击）...")
+        time.sleep(5)  # 给页面足够时间刷新
 
-    # 尝试点击 Order now
+    # 2. 定义多种按钮选择器（按优先级）
+    order_selectors = [
+        'button:contains("Order now")',
+        'button:contains("Order Now")',
+        'button:contains("Order")',
+        'button:contains("Renew")',
+        'button:contains("续期")',
+        'button:contains("购买")',
+        'button[type="submit"]:contains("Order")',
+        '.btn-primary:contains("Order")',
+        '.btn-success:contains("Order")'
+    ]
+
+    # 3. 循环尝试点击，最多尝试 2 轮，每轮等待 3 秒
+    for attempt in range(3):  # 尝试3次
+        for sel in order_selectors:
+            try:
+                # 等待元素可见并可点击
+                elem = sb.find_element(sel, timeout=5)
+                if elem is not None:
+                    # 滚动到按钮位置
+                    sb.driver.execute_script("arguments[0].scrollIntoView({block: 'center', behavior: 'smooth'});", elem.webelement)
+                    time.sleep(1)
+                    # 使用 JavaScript 点击，避免遮挡
+                    sb.driver.execute_script("arguments[0].click();", elem.webelement)
+                    print(f"✅ 点击 Order now 成功，选择器: {sel}")
+                    return True, ""
+            except Exception as e:
+                # 忽略单个选择器失败，继续尝试下一个
+                continue
+
+        # 本轮未找到，等待后重试（可能页面还在加载）
+        if attempt < 2:
+            print(f"⏳ 未找到 Order now 按钮，等待 5 秒后重试 ({attempt+1}/3)...")
+            time.sleep(5)
+
+    # 所有尝试都失败
+    # 最后尝试：使用 XPath 查找所有 button 并匹配文本
     try:
-        sb.click('button:contains("Order now")', timeout=10)
-        print("✅ 点击 Order now 成功 (button:contains)")
-        return True, ""
+        buttons = sb.find_elements('button')
+        for btn in buttons:
+            if btn is None:
+                continue
+            text = btn.text.strip().lower()
+            if any(key in text for key in ['order now', 'Order now', 'order', 'renew', '续期', '购买']):
+                sb.driver.execute_script("arguments[0].scrollIntoView({block: 'center'});", btn.webelement)
+                time.sleep(0.5)
+                sb.driver.execute_script("arguments[0].click();", btn.webelement)
+                print("✅ 通过遍历点击 Order now 成功")
+                return True, ""
     except Exception as e:
-        print(f"⚠️ button:contains 失败: {e}")
-        # 尝试遍历按钮
-        try:
-            buttons = sb.find_elements('button')
-            clicked = False
-            for btn in buttons:
-                if btn is None:
-                    continue
-                text = btn.text.strip().lower()
-                if 'order now' in text or 'order' in text or 'renew' in text:
-                    sb.driver.execute_script("arguments[0].scrollIntoView({block: 'center'});", btn.webelement)
-                    time.sleep(0.5)
-                    sb.driver.execute_script("arguments[0].click();", btn.webelement)
-                    print("✅ 通过遍历点击 Order now 成功")
-                    clicked = True
-                    break
-            if not clicked:
-                # 可能弹窗又出现了，再处理一次并重试
-                if handle_consent_popup(sb):
-                    # 再次尝试点击
-                    try:
-                        sb.click('button:contains("Order now")', timeout=5)
-                        print("✅ 再次点击 Order now 成功")
-                        return True, ""
-                    except:
-                        pass
-                return False, "未找到 Order now 按钮"
-            return True, ""
-        except Exception as e2:
-            return False, f"点击失败: {e2}"
+        print(f"⚠️ 遍历按钮失败: {e}")
 
-# ========== 检查续期结果（智能识别成功/30分钟限制/错误） ==========
+    return False, "未找到 Order now 按钮"
+
+# ========== 检查续期结果 ==========
 def check_renewal_result(sb):
-    """
-    检查页面上的 alert 信息，返回 (状态, 消息)
-    状态: 'success' / 'no_need' / 'error' / 'unknown'
-    """
-    time.sleep(5)  # 等待 alert 出现
-
-    # 先检查 alert-danger（错误提示）
+    time.sleep(5)
     try:
         danger_elem = sb.find_element('div.alert-danger', timeout=3)
         if danger_elem is not None:
@@ -190,7 +203,6 @@ def check_renewal_result(sb):
     except:
         pass
 
-    # 再检查 alert-success（成功提示）
     try:
         success_elem = sb.find_element('div.alert-success', timeout=3)
         if success_elem is not None:
@@ -201,7 +213,6 @@ def check_renewal_result(sb):
     except:
         pass
 
-    # 未检测到任何 alert
     return "unknown", "未检测到明确的续期结果"
 
 # ========== 获取服务器到期时间 ==========
@@ -222,7 +233,7 @@ def get_server_time_info(sb, refresh=False):
         print(f"⚠️ 获取服务器时间信息失败: {e}")
     return None
 
-# ========== 登录相关（增强版，支持多选择器） ==========
+# ========== 登录（与之前相同） ==========
 def perform_login_attempt(sb, email, password, attempt_number):
     print(f"\n🔄 登录尝试 {attempt_number}/2")
     print("🌐 打开登录页面...")
@@ -231,7 +242,6 @@ def perform_login_attempt(sb, email, password, attempt_number):
     time.sleep(3)
     screenshot_step(sb, f"attempt_{attempt_number}_page_loaded")
 
-    # 邮箱输入框
     email_selectors = [
         '#login_form_email',
         'input[type="email"]',
@@ -270,7 +280,6 @@ def perform_login_attempt(sb, email, password, attempt_number):
     email_input.send_keys(email)
     screenshot_step(sb, f"attempt_{attempt_number}_email_filled")
 
-    # 密码框
     password_selectors = [
         '#login_form_password',
         'input[type="password"]',
@@ -335,7 +344,6 @@ def perform_login_attempt(sb, email, password, attempt_number):
     screenshot_step(sb, f"attempt_{attempt_number}_login_clicked")
     sb.sleep(5)
 
-    # 等待跳转
     for i in range(30):
         current_url = sb.get_current_url()
         page_title = sb.get_title() or ""
@@ -371,7 +379,7 @@ def login(sb, email, password):
             return True, url
     return False, sb.get_current_url()
 
-# ========== 调度：分别创建/更新 20min 和 10min 两个任务 ==========
+# ========== 调度（同前） ==========
 def schedule_via_cronjob(trigger_timestamp, gh_token, repo, workflow_id, api_key, branch="main", minutes_before=20):
     dt = datetime.fromtimestamp(trigger_timestamp)
     schedule = {
@@ -488,9 +496,8 @@ def main():
         except:
             pass
 
-        # ---------- 登录 ----------
+        # 登录
         success, url = login(sb, EMAIL, PASSWORD)
-
         if not success:
             msg = f"{base_header}\n\n❌ 登录失败，请检查账号密码、代理或网络\nhttps://therose.cloud/"
             print(msg)
@@ -504,13 +511,12 @@ def main():
         if login_success_img:
             send_tg_photo(TG_BOT_TOKEN, TG_CHAT_ID, login_success_img, caption="✅ 登录成功")
 
-        # ---------- 打开服务器列表 ----------
+        # 服务器列表
         print("🌐 打开服务器列表页面...")
         sb.open("https://client.therose.cloud/panel?routeName=servers")
         sb.sleep(3)
         screenshot_step(sb, "server_list")
 
-        # 获取初始到期时间
         expiry_time_utc_str = get_server_time_info(sb)
         if expiry_time_utc_str:
             expiry_dt = datetime.strptime(expiry_time_utc_str, "%Y-%m-%d %H:%M")
@@ -524,7 +530,7 @@ def main():
 
         url_line = "\nhttps://therose.cloud/"
 
-        # ---------- 续期流程 ----------
+        # 续期
         print("📄 开始续期流程...")
         ok, info = click_extend_button(sb)
         if not ok:
@@ -536,7 +542,7 @@ def main():
         time.sleep(3)
         screenshot_step(sb, "extend_clicked")
 
-        # 点击 Order now（内含弹窗处理）
+        # 点击 Order now（增强版）
         order_ok, order_err = click_order_now(sb)
         if not order_ok:
             msg = f"{base_header}\n\n❌ 点击 Order now 失败: {order_err}{time_info}{url_line}"
@@ -546,9 +552,8 @@ def main():
 
         screenshot_step(sb, "ordernow_clicked")
 
-        # ---------- 检查续期结果 ----------
+        # 检查结果
         status, result_msg = check_renewal_result(sb)
-
         if status in ("success", "no_need"):
             renewal_success = True
             renewal_msg = result_msg
@@ -586,9 +591,8 @@ def main():
 
         send_tg_text(TG_BOT_TOKEN, TG_CHAT_ID, msg)
 
-        # ---------- 调度下次运行 ----------
+        # 调度
         should_schedule = (renewal_success or FORCE_SCHEDULE) and expiry_time_utc_str is not None
-
         if should_schedule:
             if FORCE_SCHEDULE and not renewal_success:
                 print("🔄 强制调度模式已开启：即使续期未成功，仍安排下次执行（首次运行）")
