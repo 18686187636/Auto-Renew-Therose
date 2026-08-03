@@ -79,26 +79,12 @@ def click_extend_button(sb):
     except Exception as e:
         return False, {"error": str(e)}
 
-# ========== 点击 Order now（优先使用 XPath） ==========
+# ========== 点击 Order now（使用固定等待 + 文本匹配/遍历） ==========
 def click_order_now(sb):
-    # 增加固定延时 5 秒，确保页面稳定，减少连接错误
+    # 固定等待 5 秒，确保页面稳定
     time.sleep(5)
 
-    # 优先使用指定的 XPath（绝对路径）
-    try:
-        wait = WebDriverWait(sb.driver, 20)
-        element = wait.until(EC.presence_of_element_located((By.XPATH, "/html/body/div/section/div/div[1]/form/div[1]/div[2]/div/div[2]/div[6]/button")))
-        if element is not None:
-            print("✅ 找到 Order now 按钮 (XPath)")
-            sb.driver.execute_script("arguments[0].scrollIntoView({block: 'center'});", element)
-            time.sleep(0.5)
-            sb.driver.execute_script("arguments[0].click();", element)
-            print("✅ 点击 Order now 成功 (XPath)")
-            return True, ""
-    except Exception as e:
-        print(f"⚠️ 通过 XPath 点击失败: {e}")
-
-    # 备选1：button:contains("Order now")
+    # 方法1：通过文本定位按钮
     try:
         sb.click('button:contains("Order now")', timeout=5)
         print("✅ 点击 Order now 成功 (button:contains)")
@@ -106,7 +92,7 @@ def click_order_now(sb):
     except Exception as e:
         print(f"⚠️ button:contains 失败: {e}")
 
-    # 备选2：遍历所有按钮
+    # 方法2：遍历所有按钮进行匹配
     try:
         buttons = sb.find_elements('button')
         for btn in buttons:
