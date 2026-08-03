@@ -33,13 +33,16 @@ if not EMAIL or not PASSWORD:
 
 # ========== 辅助函数 ==========
 def screenshot_step(sb, step_name):
+    """保存截图并返回文件名"""
     timestamp = int(time.time() * 1000)
     filename = f"step_{step_name}_{timestamp}.png"
     try:
         sb.save_screenshot(filename)
         print(f"📸 截图已保存: {filename}")
+        return filename
     except Exception as e:
         print(f"⚠️ 截图失败: {e}")
+        return None
 
 def send_tg(token, chat_id, message):
     if not token or not chat_id:
@@ -53,6 +56,23 @@ def send_tg(token, chat_id, message):
             print(f"❌ Telegram 发送失败: {resp.text}")
     except Exception as e:
         print(f"❌ Telegram 发送异常: {e}")
+
+# ===== 新增：发送图片到 Telegram =====
+def send_tg_photo(bot_token, chat_id, photo_path, caption=""):
+    if not bot_token or not chat_id:
+        return
+    url = f"https://api.telegram.org/bot{bot_token}/sendPhoto"
+    try:
+        with open(photo_path, 'rb') as f:
+            files = {'photo': f}
+            data = {'chat_id': chat_id, 'caption': caption}
+            resp = requests.post(url, files=files, data=data, timeout=30)
+        if resp.status_code == 200:
+            print(f"📸 图片已发送: {photo_path}")
+        else:
+            print(f"❌ 发送图片失败: {resp.text}")
+    except Exception as e:
+        print(f"❌ 发送图片异常: {e}")
 
 def get_current_ip(proxy_server=None):
     proxies = None
@@ -79,12 +99,12 @@ def click_extend_button(sb):
     except Exception as e:
         return False, {"error": str(e)}
 
-# ========== 点击 Order now（使用固定等待 + 文本匹配/遍历） ==========
+# ========== 点击 Order now（去除 ID 选择，仅等待5秒） ==========
 def click_order_now(sb):
-    # 固定等待 5 秒，确保页面稳定
+    # 增加固定延时 5 秒，确保页面稳定，减少连接错误
     time.sleep(5)
 
-    # 方法1：通过文本定位按钮
+    # 已移除 #order-submit 的 ID 选择，直接尝试 button:contains
     try:
         sb.click('button:contains("Order now")', timeout=5)
         print("✅ 点击 Order now 成功 (button:contains)")
@@ -92,7 +112,7 @@ def click_order_now(sb):
     except Exception as e:
         print(f"⚠️ button:contains 失败: {e}")
 
-    # 方法2：遍历所有按钮进行匹配
+    # 遍历所有按钮
     try:
         buttons = sb.find_elements('button')
         for btn in buttons:
@@ -346,6 +366,11 @@ def main():
 
         success, url = login(sb, EMAIL, PASSWORD)
 
+        # ===== 截图1：登录结果 =====
+        login_img = screenshot_step(sb, "login_result")
+        if login_img:
+            send_tg_photo(TG_BOT_TOKEN, TG_CHAT_ID, login_img, caption="🖼 登录结果")
+
         if not success:
             msg = f"{base_header}\n\n❌ 登录失败，请检查账号密码、代理或网络\nhttps://therose.cloud/"
             print(msg)
@@ -379,6 +404,11 @@ def main():
             return
 
         order_ok, order_msg = click_order_now(sb)
+        # ===== 截图2：Order now 点击结果 =====
+        order_img = screenshot_step(sb, "ordernow_result")
+        if order_img:
+            send_tg_photo(TG_BOT_TOKEN, TG_CHAT_ID, order_img, caption="🖼 Order now 点击结果")
+
         if not order_ok:
             msg = f"{base_header}\n\n❌ 点击 Order now 失败: {order_msg}{time_info}{url_line}"
             print(msg)
@@ -389,7 +419,10 @@ def main():
 
         print("🔍 检查续期结果...")
         renewal_success, renewal_msg = check_renewal_success(sb)
-        screenshot_step(sb, "renewal_result")
+        # ===== 截图3：续期结果 =====
+        renewal_img = screenshot_step(sb, "renewal_result")
+        if renewal_img:
+            send_tg_photo(TG_BOT_TOKEN, TG_CHAT_ID, renewal_img, caption="🖼 续期结果")
 
         if renewal_success:
             print("✅ 续期成功，重新获取最新到期时间...")
