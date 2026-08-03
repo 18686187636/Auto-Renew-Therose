@@ -1,4 +1,5 @@
 #!/usr/bin/env python3
+# -*- coding: utf-8 -*-
 
 import os
 import sys
@@ -22,10 +23,9 @@ GH_WORKFLOW_ID = os.environ.get("GH_WORKFLOW_ID") or ""
 
 FORCE_SCHEDULE = os.environ.get("FORCE_SCHEDULE", "false").lower() == "true"
 
-# 续期页面 ID，默认 2635，可通过环境变量覆盖
+# 续期页面 ID（默认 2635，可根据需要修改环境变量）
 SERVER_RENEW_ID = os.environ.get("SERVER_RENEW_ID", "2635")
 RENEW_URL = f"https://client.therose.cloud/panel?routeName=cart_renew&id={SERVER_RENEW_ID}"
-
 BASE_URL = "https://client.therose.cloud/login"
 
 if not EMAIL or not PASSWORD:
@@ -91,178 +91,6 @@ def get_current_ip(proxy_server=None):
 
 def get_beijing_time():
     return (datetime.utcnow() + timedelta(hours=8)).strftime("%Y-%m-%d %H:%M:%S")
-
-# ========== 点击 Extend ==========
-def click_extend_button(sb):
-    try:
-        sb.click('span:contains("Extend")', timeout=3)
-        print("✅ 点击 Extend 成功")
-        return True, {}
-    except Exception as e:
-        return False, {"error": str(e)}
-
-# ========== 关闭广告弹窗 ==========
-def close_ad_popup(sb):
-    """
-    关闭续期页面上的广告弹窗（如 "Watch an advertisement to access the site"）。
-    """
-    # 1. 尝试点击关闭按钮
-    close_selectors = [
-        'button:contains("×")',
-        'button:contains("Close")',
-        'button:contains("关闭")',
-        '.modal-close',
-        '.close',
-        '[aria-label="Close"]',
-        'button[data-dismiss="modal"]',
-        '.ad-close',
-        '#ad-close'
-    ]
-    for sel in close_selectors:
-        try:
-            elem = sb.find_element(sel, timeout=2)
-            if elem:
-                sb.click(sel)
-                print(f"✅ 已点击广告关闭按钮: {sel}")
-                time.sleep(1)
-                return True
-        except:
-            continue
-
-    # 2. 尝试通过文本定位并移除
-    try:
-        ad_elem = sb.find_element('*:contains("Watch an advertisement")', timeout=2)
-        if ad_elem:
-            print("⚠️ 找到广告文本，使用 JavaScript 移除弹窗...")
-            sb.driver.execute_script("""
-                var elems = document.querySelectorAll('div, section, article');
-                for(var i=0; i<elems.length; i++) {
-                    if(elems[i].innerText && elems[i].innerText.indexOf('Watch an advertisement') !== -1) {
-                        var parent = elems[i].closest('div[style*="position"], div[class*="modal"], div[class*="overlay"]');
-                        if(parent) parent.remove();
-                        else elems[i].remove();
-                        break;
-                    }
-                }
-            """)
-            print("✅ 已通过 JavaScript 移除广告弹窗")
-            time.sleep(1)
-            return True
-    except:
-        pass
-
-    # 3. 若仍无法关闭，刷新页面（广告可能只出现一次）
-    print("⚠️ 无法关闭广告，尝试刷新页面...")
-    sb.refresh()
-    time.sleep(3)
-    return False
-
-# ========== 点击 Order now（直接访问续期页面，避免 Consent 弹窗） ==========
-def click_order_now(sb):
-    """
-    直接打开续期订单页，关闭广告，然后点击 Order now。
-    避免因 Consent 弹窗导致的 WebDriver 会话中断。
-    """
-    # 1. 直接打开续期页面
-    print(f"🌐 直接打开续期页面: {RENEW_URL}")
-    sb.open(RENEW_URL)
-    time.sleep(3)
-
-    # 2. 关闭广告弹窗（若有）
-    print("🔍 检查并关闭广告弹窗...")
-    close_ad_popup(sb)
-
-    # 3. 等待续期页面加载
-    try:
-        sb.wait_for_element_present('*:contains("Renew your server")', timeout=10)
-        print("✅ 续期页面已加载")
-    except:
-        print("⚠️ 续期页面标题未出现，但继续尝试...")
-
-    # 4. 打印当前状态
-    current_url = sb.get_current_url()
-    page_title = sb.get_title() or ""
-    print(f"📍 当前 URL: {current_url}")
-    print(f"📄 页面标题: {page_title}")
-
-    # 5. 使用 ID 选择器点击 Order now
-    order_selector = 'button#order-submit'
-    try:
-        elem = sb.wait_for_element_present(order_selector, timeout=10)
-        if elem:
-            sb.driver.execute_script("arguments[0].scrollIntoView({block: 'center', behavior: 'smooth'});", elem.webelement)
-            time.sleep(0.5)
-            sb.driver.execute_script("arguments[0].click();", elem.webelement)
-            print(f"✅ 点击 Order now 成功，选择器: {order_selector}")
-            return True, ""
-    except Exception as e:
-        print(f"⚠️ 点击 Order now 失败: {e}")
-
-    # 6. 若失败，刷新页面重试一次
-    try:
-        print("🔄 刷新页面并重试...")
-        sb.refresh()
-        time.sleep(5)
-        elem = sb.wait_for_element_present(order_selector, timeout=10)
-        if elem:
-            sb.driver.execute_script("arguments[0].scrollIntoView({block: 'center', behavior: 'smooth'});", elem.webelement)
-            time.sleep(0.5)
-            sb.driver.execute_script("arguments[0].click();", elem.webelement)
-            print("✅ 刷新后点击 Order now 成功")
-            return True, ""
-    except Exception as e:
-        print(f"⚠️ 刷新后重试仍失败: {e}")
-
-    # 全部失败，保存截图并发送
-    fail_img = screenshot_step(sb, "order_now_not_found")
-    if fail_img:
-        send_tg_photo(TG_BOT_TOKEN, TG_CHAT_ID, fail_img, caption="❌ 未找到 Order now 按钮")
-    return False, "未找到 Order now 按钮"
-
-# ========== 检查续期结果 ==========
-def check_renewal_result(sb):
-    time.sleep(5)
-    try:
-        danger_elem = sb.find_element('div.alert-danger', timeout=3)
-        if danger_elem is not None:
-            text = danger_elem.text.strip()
-            print(f"⚠️ 检测到错误提示: {text}")
-            if "Renewal is available only within 30 minutes before expiration" in text:
-                return "no_need", "未到期，需在到期前30分钟内续期（当前不满足）"
-            else:
-                return "error", f"续期出错: {text}"
-    except:
-        pass
-
-    try:
-        success_elem = sb.find_element('div.alert-success', timeout=3)
-        if success_elem is not None:
-            text = success_elem.text.strip()
-            print(f"✅ 检测到成功提示: {text}")
-            if "successfully purchased" in text or "success" in text.lower():
-                return "success", "续期成功"
-    except:
-        pass
-
-    return "unknown", "未检测到明确的续期结果"
-
-# ========== 获取服务器到期时间 ==========
-def get_server_time_info(sb, refresh=False):
-    try:
-        if refresh:
-            print("🔄 刷新服务器列表页面以获取最新到期时间...")
-            sb.open("https://client.therose.cloud/panel?routeName=servers")
-            sb.sleep(3)
-            screenshot_step(sb, "refresh_server_list")
-        el = sb.find_element('span.fw-bold.text-muted', timeout=10)
-        if el is not None:
-            time_str = el.text.strip()
-            print(f"📅 服务器到期时间 (UTC): {time_str}")
-            datetime.strptime(time_str, "%Y-%m-%d %H:%M")
-            return time_str
-    except Exception as e:
-        print(f"⚠️ 获取服务器时间信息失败: {e}")
-    return None
 
 # ========== 登录（保持不变） ==========
 def perform_login_attempt(sb, email, password, attempt_number):
@@ -410,6 +238,94 @@ def login(sb, email, password):
             return True, url
     return False, sb.get_current_url()
 
+# ========== 获取服务器到期时间 ==========
+def get_server_time_info(sb, refresh=False):
+    try:
+        if refresh:
+            print("🔄 刷新服务器列表页面以获取最新到期时间...")
+            sb.open("https://client.therose.cloud/panel?routeName=servers")
+            sb.sleep(3)
+            screenshot_step(sb, "refresh_server_list")
+        el = sb.find_element('span.fw-bold.text-muted', timeout=10)
+        if el is not None:
+            time_str = el.text.strip()
+            print(f"📅 服务器到期时间 (UTC): {time_str}")
+            datetime.strptime(time_str, "%Y-%m-%d %H:%M")
+            return time_str
+    except Exception as e:
+        print(f"⚠️ 获取服务器时间信息失败: {e}")
+    return None
+
+# ========== 核心续期操作（直接打开续期页面并点击 Order now） ==========
+def perform_renewal(sb):
+    """
+    登录后直接打开续期页面，点击 Order now，不处理任何弹窗。
+    返回 (成功标志, 消息)
+    """
+    # 1. 直接打开续期页面
+    print(f"🌐 直接打开续期页面: {RENEW_URL}")
+    sb.open(RENEW_URL)
+    time.sleep(5)
+
+    # 2. 等待页面加载（等待按钮出现）
+    order_selector = 'button#order-submit'
+    try:
+        elem = sb.wait_for_element_present(order_selector, timeout=15)
+        if elem:
+            # 滚动到按钮并点击
+            sb.driver.execute_script("arguments[0].scrollIntoView({block: 'center', behavior: 'smooth'});", elem.webelement)
+            time.sleep(1)
+            sb.driver.execute_script("arguments[0].click();", elem.webelement)
+            print(f"✅ 点击 Order now 成功，选择器: {order_selector}")
+            return True, ""
+    except Exception as e:
+        print(f"⚠️ 点击 Order now 失败: {e}")
+        # 若失败，尝试刷新页面重试一次
+        try:
+            print("🔄 刷新页面并重试...")
+            sb.refresh()
+            time.sleep(5)
+            elem = sb.wait_for_element_present(order_selector, timeout=10)
+            if elem:
+                sb.driver.execute_script("arguments[0].scrollIntoView({block: 'center', behavior: 'smooth'});", elem.webelement)
+                time.sleep(1)
+                sb.driver.execute_script("arguments[0].click();", elem.webelement)
+                print("✅ 刷新后点击 Order now 成功")
+                return True, ""
+        except Exception as e2:
+            print(f"⚠️ 刷新后重试仍失败: {e2}")
+
+    # 失败，截图并返回
+    screenshot_step(sb, "order_now_failed")
+    return False, "未能点击 Order now"
+
+# ========== 检查续期结果 ==========
+def check_renewal_result(sb):
+    time.sleep(5)
+    try:
+        danger_elem = sb.find_element('div.alert-danger', timeout=3)
+        if danger_elem is not None:
+            text = danger_elem.text.strip()
+            print(f"⚠️ 检测到错误提示: {text}")
+            if "Renewal is available only within 30 minutes before expiration" in text:
+                return "no_need", "未到期，需在到期前30分钟内续期（当前不满足）"
+            else:
+                return "error", f"续期出错: {text}"
+    except:
+        pass
+
+    try:
+        success_elem = sb.find_element('div.alert-success', timeout=3)
+        if success_elem is not None:
+            text = success_elem.text.strip()
+            print(f"✅ 检测到成功提示: {text}")
+            if "successfully purchased" in text or "success" in text.lower():
+                return "success", "续期成功"
+    except:
+        pass
+
+    return "unknown", "未检测到明确的续期结果"
+
 # ========== 调度（cron-job.org，保持不变） ==========
 def schedule_via_cronjob(trigger_timestamp, gh_token, repo, workflow_id, api_key, branch="main", minutes_before=20):
     dt = datetime.fromtimestamp(trigger_timestamp)
@@ -519,8 +435,16 @@ def main():
         f"🕐 当前北京时间: {beijing_time}"
     )
 
-    with SB(uc=True, headless=False, proxy=PROXY_SERVER or None,
-            page_load_strategy='eager') as sb:
+    # 添加 Chrome 参数以提高稳定性
+    chrome_args = [
+        "--no-sandbox",
+        "--disable-dev-shm-usage",
+        "--disable-gpu",
+        "--window-size=1920,1080"
+    ]
+
+    with SB(uc=True, headless=True, proxy=PROXY_SERVER or None,
+            page_load_strategy='eager', chromedriver_args=chrome_args) as sb:
         try:
             sb.driver.set_page_load_timeout(120)
             sb.driver.set_script_timeout(120)
@@ -542,7 +466,7 @@ def main():
         if login_success_img:
             send_tg_photo(TG_BOT_TOKEN, TG_CHAT_ID, login_success_img, caption="✅ 登录成功")
 
-        # ---------- 打开服务器列表 ----------
+        # ---------- 获取当前到期时间（从服务器列表页） ----------
         print("🌐 打开服务器列表页面...")
         sb.open("https://client.therose.cloud/panel?routeName=servers")
         sb.sleep(3)
@@ -561,22 +485,11 @@ def main():
 
         url_line = "\nhttps://therose.cloud/"
 
-        # ---------- 续期流程 ----------
+        # ---------- 执行续期（直接打开续期页面，不点击 Extend） ----------
         print("📄 开始续期流程...")
-        ok, info = click_extend_button(sb)
-        if not ok:
-            msg = f"{base_header}\n\n❌ 点击 Extend 按钮失败: {info.get('error')}{time_info}{url_line}"
-            print(msg)
-            send_tg_text(TG_BOT_TOKEN, TG_CHAT_ID, msg)
-            return
-
-        time.sleep(3)
-        screenshot_step(sb, "extend_clicked")
-
-        # 点击 Order now（直接访问续期页面，避免 Consent 弹窗）
-        order_ok, order_err = click_order_now(sb)
-        if not order_ok:
-            msg = f"{base_header}\n\n❌ 点击 Order now 失败: {order_err}{time_info}{url_line}"
+        renew_ok, renew_err = perform_renewal(sb)
+        if not renew_ok:
+            msg = f"{base_header}\n\n❌ 续期失败: {renew_err}{time_info}{url_line}"
             print(msg)
             send_tg_text(TG_BOT_TOKEN, TG_CHAT_ID, msg)
             return
