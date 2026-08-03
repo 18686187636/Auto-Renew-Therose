@@ -122,88 +122,98 @@ def handle_consent_popup(sb):
             continue
     return False
 
-# ========== 点击 Order now（增强版，强制重新加载页面） ==========
+# ========== 处理广告弹窗 ==========
+def close_ad_popup(sb):
+    """
+    关闭续期页面上的广告弹窗（如 "Watch an advertisement to access the site"）。
+    尝试多种关闭按钮选择器，或直接移除遮挡元素。
+    """
+    # 1. 尝试点击关闭按钮
+    close_selectors = [
+        'button:contains("×")',
+        'button:contains("Close")',
+        'button:contains("关闭")',
+        '.modal-close',
+        '.close',
+        '[aria-label="Close"]',
+        'button[data-dismiss="modal"]',
+        '.ad-close',
+        '#ad-close'
+    ]
+    for sel in close_selectors:
+        try:
+            elem = sb.find_element(sel, timeout=2)
+            if elem:
+                sb.click(sel)
+                print(f"✅ 已点击广告关闭按钮: {sel}")
+                time.sleep(1)
+                return True
+        except:
+            continue
+
+    # 2. 如果找不到关闭按钮，尝试通过文本定位并点击其父元素中的关闭按钮
+    try:
+        # 查找包含 "Watch an advertisement" 的元素
+        ad_elem = sb.find_element('*:contains("Watch an advertisement")', timeout=2)
+        if ad_elem:
+            # 尝试在其父级中找关闭按钮
+            parent = ad_elem.find_element_by_xpath('..')  # 使用 xpath 或通过 js 处理
+            # 但 seleniumbase 可能不支持直接 xpath 查找，我们使用 JavaScript 移除整个弹窗
+            print("⚠️ 找到广告文本，尝试使用 JavaScript 移除弹窗...")
+            sb.driver.execute_script("""
+                var elems = document.querySelectorAll('div, section, article');
+                for(var i=0; i<elems.length; i++) {
+                    if(elems[i].innerText && elems[i].innerText.indexOf('Watch an advertisement') !== -1) {
+                        var parent = elems[i].closest('div[style*="position"], div[class*="modal"], div[class*="overlay"]');
+                        if(parent) parent.remove();
+                        else elems[i].remove();
+                        break;
+                    }
+                }
+            """)
+            print("✅ 已通过 JavaScript 移除广告弹窗")
+            time.sleep(1)
+            return True
+    except:
+        pass
+
+    # 3. 若仍无法关闭，尝试刷新页面（可能广告只出现一次）
+    print("⚠️ 无法关闭广告，尝试刷新页面...")
+    sb.refresh()
+    time.sleep(3)
+    return False
+
+# ========== 点击 Order now（增强版：关闭广告 + 显式等待） ==========
 def click_order_now(sb):
     """
-    处理 Consent 弹窗，点击后页面跳转到续期订单页，等待并点击 Order now。
-    如果连接中断，使用 sb.open 重新加载当前 URL。
+    处理 Consent 弹窗，然后关闭可能的广告弹窗，最后点击 Order now。
     """
     # 1. 处理 Consent
     consent_clicked = handle_consent_popup(sb)
     if consent_clicked:
         print("⏳ 等待页面跳转（Consent 已点击）...")
-        time.sleep(3)
-        # 获取当前 URL（可能已经跳转）
-        try:
-            current_url = sb.get_current_url()
-        except:
-            current_url = ""
-        if "cart_renew" not in current_url:
-            # 如果还没跳转，等待几秒再检查
-            time.sleep(2)
-            try:
-                current_url = sb.get_current_url()
-            except:
-                current_url = ""
-        print(f"📍 当前 URL: {current_url}")
-        # 如果 URL 包含 cart_renew，但后续连接可能断裂，强制重新加载该 URL
-        if "cart_renew" in current_url:
-            print("🔄 强制重新加载续期页面以重建连接...")
-            try:
-                sb.open(current_url)
-                time.sleep(3)
-            except Exception as e:
-                print(f"⚠️ 重新加载页面失败: {e}")
-        else:
-            # 如果未跳转，尝试直接打开已知的续期 URL（使用实际的 id，但可能每次不同，我们从当前页面获取）
-            # 这里先尝试通过点击再次触发，但为了稳健，我们使用 sb.open 打开一个可能的 URL
-            # 由于 id 是动态的，我们最好从页面元素获取，但连接可能已断，故先尝试获取。
-            try:
-                # 尝试从当前页面元素中提取续期链接（如果有）
-                # 如果没有，直接报错
-                print("⚠️ 未跳转到续期页面，尝试通过点击 Extend 重新触发...")
-                click_extend_button(sb)
-                time.sleep(3)
-                # 再次处理 Consent
-                handle_consent_popup(sb)
-                time.sleep(3)
-                # 重新获取 URL
-                current_url = sb.get_current_url()
-                if "cart_renew" in current_url:
-                    print(f"📍 重新触发后 URL: {current_url}")
-                    sb.open(current_url)
-                    time.sleep(3)
-                else:
-                    print("❌ 无法进入续期页面")
-                    return False, "无法进入续期页面"
-            except Exception as e:
-                print(f"❌ 重新触发失败: {e}")
-                return False, "无法进入续期页面"
-
+        time.sleep(5)  # 等待跳转
     else:
-        print("ℹ️ 未检测到 Consent 弹窗，直接查找 Order now...")
+        print("ℹ️ 未检测到 Consent 弹窗，继续...")
 
-    # 2. 再次获取当前 URL 和标题
+    # 2. 关闭广告弹窗（若有）
+    print("🔍 检查并关闭广告弹窗...")
+    close_ad_popup(sb)
+
+    # 3. 确保页面完全加载
     try:
-        current_url = sb.get_current_url()
-        page_title = sb.get_title() or ""
-        print(f"📍 当前 URL: {current_url}")
-        print(f"📄 页面标题: {page_title}")
+        sb.wait_for_element_present('*:contains("Renew your server")', timeout=10)
+        print("✅ 续期页面已加载")
     except:
-        # 如果连接已断，尝试用 sb.open 重新打开
-        try:
-            # 尝试从环境或已知 URL 打开
-            sb.open("https://client.therose.cloud/panel?routeName=cart_renew&id=2635")
-            time.sleep(3)
-            current_url = sb.get_current_url()
-            page_title = sb.get_title() or ""
-            print(f"📍 重新打开后 URL: {current_url}")
-            print(f"📄 页面标题: {page_title}")
-        except Exception as e:
-            print(f"❌ 无法恢复连接: {e}")
-            return False, "浏览器连接中断"
+        print("⚠️ 续期页面标题未出现，但继续尝试...")
 
-    # 3. 多选择器
+    # 4. 打印当前状态
+    current_url = sb.get_current_url()
+    page_title = sb.get_title() or ""
+    print(f"📍 当前 URL: {current_url}")
+    print(f"📄 页面标题: {page_title}")
+
+    # 5. 多选择器（涵盖 button、a、input）
     order_selectors = [
         'button:contains("Order now")',
         'button:contains("Order Now")',
@@ -217,7 +227,7 @@ def click_order_now(sb):
         '.btn-success:contains("Order")'
     ]
 
-    # 4. 显式等待尝试点击
+    # 6. 使用显式等待依次尝试选择器
     for sel in order_selectors:
         try:
             elem = sb.wait_for_element_present(sel, timeout=5)
@@ -228,9 +238,10 @@ def click_order_now(sb):
                 print(f"✅ 点击 Order now 成功，选择器: {sel}")
                 return True, ""
         except Exception as e:
+            # 单个选择器失败，继续尝试下一个
             continue
 
-    # 5. 兜底遍历
+    # 7. 若所有选择器均失败，尝试遍历所有 button 和 a（兜底）
     try:
         print("🔄 使用最终兜底方案：遍历所有按钮/链接...")
         elements = sb.find_elements('button') + sb.find_elements('a')
@@ -245,6 +256,7 @@ def click_order_now(sb):
                 sb.driver.execute_script("arguments[0].click();", elem.webelement)
                 print(f"✅ 通过遍历点击成功，文本: {text}")
                 return True, ""
+        # 尝试 input 提交按钮
         inputs = sb.find_elements('input[type="submit"]')
         for inp in inputs:
             if inp is None:
@@ -258,8 +270,23 @@ def click_order_now(sb):
                 return True, ""
     except Exception as e:
         print(f"⚠️ 遍历元素失败: {e}")
+        # 如果发生连接错误，尝试刷新页面再试一次
+        try:
+            print("🔄 尝试刷新页面后再次查找...")
+            sb.refresh()
+            time.sleep(5)
+            # 再次尝试点击（直接使用第一个选择器）
+            elem = sb.find_element('button:contains("Order now")', timeout=5)
+            if elem:
+                sb.driver.execute_script("arguments[0].scrollIntoView({block: 'center'});", elem.webelement)
+                time.sleep(0.5)
+                sb.driver.execute_script("arguments[0].click();", elem.webelement)
+                print("✅ 刷新后点击 Order now 成功")
+                return True, ""
+        except:
+            pass
 
-    # 全部失败
+    # 全部失败，保存截图并发送
     fail_img = screenshot_step(sb, "order_now_not_found")
     if fail_img:
         send_tg_photo(TG_BOT_TOKEN, TG_CHAT_ID, fail_img, caption="❌ 未找到 Order now 按钮，请查看截图")
@@ -619,7 +646,7 @@ def main():
         time.sleep(3)
         screenshot_step(sb, "extend_clicked")
 
-        # 点击 Order now（内部处理 Consent、等待、重试）
+        # 点击 Order now（内部处理 Consent、关闭广告、重试）
         order_ok, order_err = click_order_now(sb)
         if not order_ok:
             msg = f"{base_header}\n\n❌ 点击 Order now 失败: {order_err}{time_info}{url_line}"
