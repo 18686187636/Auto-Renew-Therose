@@ -116,24 +116,32 @@ def handle_consent_popup(sb):
                 print(f"🔘 找到 Consent 弹窗按钮，选择器: {sel}")
                 sb.click(sel)
                 print("✅ 已点击 Consent 按钮")
-                time.sleep(2)  # 增加等待，让页面更新
+                time.sleep(2)
                 return True
         except:
             continue
     return False
 
-# ========== 点击 Order now（增强版） ==========
+# ========== 点击 Order now（极致增强版） ==========
 def click_order_now(sb):
     """
-    处理 Consent 弹窗，并等待 Order now 按钮出现，支持多选择器和滚动。
+    处理 Consent 弹窗，并智能查找 Order now 按钮，支持重试和调试截图。
     """
-    # 1. 先处理 Consent 弹窗
+    # 1. 处理 Consent
     consent_clicked = handle_consent_popup(sb)
     if consent_clicked:
         print("⏳ 等待页面加载（Consent 已点击）...")
-        time.sleep(5)  # 给页面足够时间刷新
+        time.sleep(8)  # 增加初始等待
+    else:
+        print("ℹ️ 未检测到 Consent 弹窗，继续查找 Order now...")
 
-    # 2. 定义多种按钮选择器（按优先级）
+    # 2. 打印当前状态
+    current_url = sb.get_current_url()
+    page_title = sb.get_title() or ""
+    print(f"📍 当前 URL: {current_url}")
+    print(f"📄 页面标题: {page_title}")
+
+    # 3. 多选择器列表（涵盖各种可能）
     order_selectors = [
         'button:contains("Order now")',
         'button:contains("Order Now")',
@@ -143,49 +151,68 @@ def click_order_now(sb):
         'button:contains("购买")',
         'button[type="submit"]:contains("Order")',
         '.btn-primary:contains("Order")',
-        '.btn-success:contains("Order")'
+        '.btn-success:contains("Order")',
+        'input[type="submit"][value*="Order"]',
+        'input[type="submit"][value*="Renew"]',
+        'a:contains("Order now")',
+        'a:contains("Renew")'
     ]
 
-    # 3. 循环尝试点击，最多尝试 2 轮，每轮等待 3 秒
-    for attempt in range(3):  # 尝试3次
+    # 4. 多次重试
+    for attempt in range(5):  # 尝试 5 次
         for sel in order_selectors:
             try:
-                # 等待元素可见并可点击
-                elem = sb.find_element(sel, timeout=5)
+                elem = sb.find_element(sel, timeout=3)
                 if elem is not None:
-                    # 滚动到按钮位置
+                    # 滚动到元素并点击
                     sb.driver.execute_script("arguments[0].scrollIntoView({block: 'center', behavior: 'smooth'});", elem.webelement)
-                    time.sleep(1)
-                    # 使用 JavaScript 点击，避免遮挡
+                    time.sleep(0.5)
                     sb.driver.execute_script("arguments[0].click();", elem.webelement)
                     print(f"✅ 点击 Order now 成功，选择器: {sel}")
                     return True, ""
-            except Exception as e:
-                # 忽略单个选择器失败，继续尝试下一个
+            except:
                 continue
 
-        # 本轮未找到，等待后重试（可能页面还在加载）
-        if attempt < 2:
-            print(f"⏳ 未找到 Order now 按钮，等待 5 秒后重试 ({attempt+1}/3)...")
+        # 如果未找到，等待后重试
+        if attempt < 4:
+            print(f"⏳ 未找到 Order now 按钮，等待 5 秒后重试 ({attempt+1}/5)...")
             time.sleep(5)
 
-    # 所有尝试都失败
-    # 最后尝试：使用 XPath 查找所有 button 并匹配文本
+    # 5. 最终兜底：遍历所有 button
     try:
+        print("🔄 使用最终兜底方案：遍历所有按钮...")
         buttons = sb.find_elements('button')
         for btn in buttons:
             if btn is None:
                 continue
             text = btn.text.strip().lower()
-            if any(key in text for key in ['order now', 'Order now', 'order', 'renew', '续期', '购买']):
+            # 检查关键词
+            keywords = ['order', 'renew', '续期', '购买', 'now']
+            if any(k in text for k in keywords):
                 sb.driver.execute_script("arguments[0].scrollIntoView({block: 'center'});", btn.webelement)
                 time.sleep(0.5)
                 sb.driver.execute_script("arguments[0].click();", btn.webelement)
-                print("✅ 通过遍历点击 Order now 成功")
+                print(f"✅ 通过遍历点击按钮成功，文本: {text}")
+                return True, ""
+        # 再尝试找 input 类型按钮
+        inputs = sb.find_elements('input[type="submit"]')
+        for inp in inputs:
+            if inp is None:
+                continue
+            value = inp.get_attribute("value") or ""
+            if any(k in value.lower() for k in ['order', 'renew', '续期', '购买']):
+                sb.driver.execute_script("arguments[0].scrollIntoView({block: 'center'});", inp.webelement)
+                time.sleep(0.5)
+                sb.driver.execute_script("arguments[0].click();", inp.webelement)
+                print(f"✅ 通过 input 类型点击成功，value: {value}")
                 return True, ""
     except Exception as e:
         print(f"⚠️ 遍历按钮失败: {e}")
 
+    # 全部失败，保存截图以便调试
+    fail_img = screenshot_step(sb, "order_now_not_found")
+    if fail_img:
+        send_tg_photo(TG_BOT_TOKEN, TG_CHAT_ID, fail_img, caption="❌ 未找到 Order now 按钮，请查看截图")
     return False, "未找到 Order now 按钮"
 
 # ========== 检查续期结果 ==========
@@ -233,7 +260,7 @@ def get_server_time_info(sb, refresh=False):
         print(f"⚠️ 获取服务器时间信息失败: {e}")
     return None
 
-# ========== 登录（与之前相同） ==========
+# ========== 登录（不变） ==========
 def perform_login_attempt(sb, email, password, attempt_number):
     print(f"\n🔄 登录尝试 {attempt_number}/2")
     print("🌐 打开登录页面...")
@@ -379,7 +406,7 @@ def login(sb, email, password):
             return True, url
     return False, sb.get_current_url()
 
-# ========== 调度（同前） ==========
+# ========== 调度（不变） ==========
 def schedule_via_cronjob(trigger_timestamp, gh_token, repo, workflow_id, api_key, branch="main", minutes_before=20):
     dt = datetime.fromtimestamp(trigger_timestamp)
     schedule = {
@@ -542,12 +569,13 @@ def main():
         time.sleep(3)
         screenshot_step(sb, "extend_clicked")
 
-        # 点击 Order now（增强版）
+        # 点击 Order now（增强版，失败自动发送截图）
         order_ok, order_err = click_order_now(sb)
         if not order_ok:
             msg = f"{base_header}\n\n❌ 点击 Order now 失败: {order_err}{time_info}{url_line}"
             print(msg)
             send_tg_text(TG_BOT_TOKEN, TG_CHAT_ID, msg)
+            # 已在 click_order_now 中发送截图，此处不再重复
             return
 
         screenshot_step(sb, "ordernow_clicked")
