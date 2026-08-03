@@ -435,7 +435,7 @@ def main():
         f"🕐 当前北京时间: {beijing_time}"
     )
 
-    # 添加 Chrome 参数以提高稳定性
+    # Chrome 参数（提高 headless 模式稳定性）
     chrome_args = [
         "--no-sandbox",
         "--disable-dev-shm-usage",
@@ -444,7 +444,7 @@ def main():
     ]
 
     with SB(uc=True, headless=True, proxy=PROXY_SERVER or None,
-            page_load_strategy='eager', chromedriver_args=chrome_args) as sb:
+            page_load_strategy='eager', chrome_args=chrome_args) as sb:
         try:
             sb.driver.set_page_load_timeout(120)
             sb.driver.set_script_timeout(120)
