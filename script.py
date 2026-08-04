@@ -57,7 +57,6 @@ def send_tg(token, chat_id, message):
     except Exception as e:
         print(f"❌ Telegram 发送异常: {e}")
 
-# ===== 新增：发送图片到 Telegram =====
 def send_tg_photo(bot_token, chat_id, photo_path, caption=""):
     if not bot_token or not chat_id:
         return
@@ -98,6 +97,37 @@ def click_extend_button(sb):
         return True, {}
     except Exception as e:
         return False, {"error": str(e)}
+
+# ========== 处理 Consent 按钮 ==========
+def handle_consent_if_present(sb):
+    """检测并点击可能出现的 Consent 弹窗按钮"""
+    consent_selectors = [
+        'button:contains("Consent")',
+        'button:contains("Accept")',
+        'button:contains("I agree")',
+        'button:contains("同意")',
+        'button:contains("Accept all")',
+        'button:contains("Allow")',
+        # 可添加更多自定义选择器，如 id、class
+        '#consent-button',
+        '.consent-btn',
+        '[data-consent="accept"]'
+    ]
+    for selector in consent_selectors:
+        try:
+            btn = sb.find_element(selector, timeout=2)
+            if btn and btn.is_displayed():
+                sb.driver.execute_script("arguments[0].scrollIntoView({block: 'center'});", btn)
+                time.sleep(0.5)
+                sb.driver.execute_script("arguments[0].click();", btn)
+                print(f"✅ 已点击 Consent 按钮: {selector}")
+                # 等待弹窗消失
+                time.sleep(1)
+                return True
+        except:
+            continue
+    print("ℹ️ 未检测到 Consent 按钮，继续执行")
+    return False
 
 # ========== 点击 Order now（去除 ID 选择，仅等待5秒） ==========
 def click_order_now(sb):
@@ -402,6 +432,10 @@ def main():
             print(msg)
             send_tg(TG_BOT_TOKEN, TG_CHAT_ID, msg)
             return
+
+        # ---- 新增：处理 Consent 按钮 ----
+        handle_consent_if_present(sb)
+        # --------------------------------
 
         order_ok, order_msg = click_order_now(sb)
         # ===== 截图2：Order now 点击结果 =====
