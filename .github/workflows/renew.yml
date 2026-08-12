@@ -168,7 +168,7 @@ jobs:
           GH_TOKEN: ${{ secrets.GH_TOKEN }}
           GH_REPO: ${{ secrets.GH_REPO }}
           GH_WORKFLOW_ID: ${{ secrets.GH_WORKFLOW_ID }}
-          FORCE_SCHEDULE: "true"   # 🆕 首次运行强制调度true，正常后可改为 "false" 或删除
+          FORCE_SCHEDULE: "false"   # 🆕 首次运行强制调度true，正常后可改为 "false" 或删除
         run: |
           if [ -n "$PROXY_SERVER" ]; then
             echo "🔗 已启用代理: $PROXY_SERVER"
