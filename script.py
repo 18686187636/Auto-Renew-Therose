@@ -2,7 +2,10 @@
 """
 TheRose Cloud 自动续期脚本
 适配 2025 新版站点：
-  - React SPA，dashboard 在 https://therose.cloud/dashboard
+  - 登录页: https://therose.cloud/login?next=%2Fdashboard
+    input[data-testid="login-email"] / input[data-testid="login-password"]
+    button[data-testid="login-submit"]
+  - dashboard: https://therose.cloud/dashboard（React SPA）
   - 到期时间以倒计时显示（如 "4h 41m 32s"）
   - 续期按钮 data-testid="renew-<uuid>"，可续期窗口 = [到期-30min, 到期]
   - 每次续期延长 6 小时
@@ -32,8 +35,15 @@ GH_WORKFLOW_ID = os.environ.get("GH_WORKFLOW_ID") or ""
 
 FORCE_SCHEDULE = os.environ.get("FORCE_SCHEDULE", "false").lower() == "true"
 
-BASE_URL = "https://therose.cloud/login"
+# ========== URL 常量 ==========
+BASE_URL = "https://therose.cloud/login?next=%2Fdashboard"
 DASHBOARD_URL = "https://therose.cloud/dashboard"
+
+# ========== 新版选择器常量 ==========
+SEL_LOGIN_EMAIL = 'input[data-testid="login-email"]'
+SEL_LOGIN_PASSWORD = 'input[data-testid="login-password"]'
+SEL_LOGIN_SUBMIT = 'button[data-testid="login-submit"]'
+SEL_SERVER_CARD = 'div.trc-server[data-testid^="server-"]'
 
 # 可续期窗口 = [到期-30min, 到期]，提前 25 分钟触发，留 5 分钟缓冲
 MINUTES_BEFORE_EXPIRY = 25
@@ -132,12 +142,12 @@ def parse_countdown(text: str):
 # ========== 新版：读取服务器卡片信息 ==========
 def get_server_info(sb):
     """
-    读取 dashboard 上的服务器卡片，返回:
+    读取 dashboard 上的服务器卡片（单台），返回:
       uuid, countdown_text, expiry_utc,
       renew_btn_selector, renew_btn_enabled, renew_btn_text
     """
-    sb.find_element('div.trc-server[data-testid^="server-"]', timeout=30)
-    cards = sb.find_elements('div.trc-server[data-testid^="server-"]')
+    sb.find_element(SEL_SERVER_CARD, timeout=30)
+    cards = sb.find_elements(SEL_SERVER_CARD)
     if not cards:
         raise RuntimeError("找不到服务器卡片 div.trc-server")
 
@@ -226,7 +236,7 @@ def verify_renewal(sb, uuid, old_expiry_utc):
         return False, f"验证失败: {e}", None
 
 
-# ========== Consent 弹窗处理（保留） ==========
+# ========== Consent 弹窗处理 ==========
 def handle_consent_if_present(sb):
     selectors = [
         'button:contains("Consent")',
@@ -256,27 +266,40 @@ def handle_consent_if_present(sb):
     return False
 
 
-# ========== 登录 ==========
+# ========== 登录（新版：data-testid 选择器） ==========
 def perform_login_attempt(sb, email, password, attempt_number):
     print(f"\n🔄 登录尝试 {attempt_number}/2")
     print("🌐 打开登录页面...")
     sb.open(BASE_URL)
     sb.wait_for_ready_state_complete()
-    sb.sleep(1)
+    sb.sleep(2)
     screenshot_step(sb, f"attempt_{attempt_number}_page_loaded")
 
-    print("📧 填写邮箱...")
-    sb.type('#login_form_email', email, timeout=10)
+    # ---- 邮箱 ----
+    print("📧 等待邮箱输入框...")
+    sb.wait_for_element(SEL_LOGIN_EMAIL, timeout=30)
+    sb.type(SEL_LOGIN_EMAIL, email, timeout=15)
+    print("✅ 邮箱已填写")
     screenshot_step(sb, f"attempt_{attempt_number}_email_filled")
 
-    print("🔑 填写密码...")
-    sb.type('#login_form_password', password, timeout=10)
+    # ---- 密码 ----
+    print("🔑 等待密码输入框...")
+    sb.wait_for_element(SEL_LOGIN_PASSWORD, timeout=15)
+    sb.type(SEL_LOGIN_PASSWORD, password, timeout=15)
+    print("✅ 密码已填写")
     screenshot_step(sb, f"attempt_{attempt_number}_password_filled")
 
-    print("⏳ 等待 60 秒确保 Turnstile 完全加载...")
-    time.sleep(60)
-    screenshot_step(sb, f"attempt_{attempt_number}_after_60s_wait")
+    # ---- 等 Turnstile ----
+    print("⏳ 等待 Turnstile iframe 出现...")
+    try:
+        sb.wait_for_element('iframe[src*="challenges.cloudflare.com"]', timeout=60)
+        print("✅ Turnstile iframe 已出现")
+    except Exception:
+        print("⚠️ 未检测到 Turnstile iframe，可能无需验证")
+    time.sleep(10)
+    screenshot_step(sb, f"attempt_{attempt_number}_before_captcha")
 
+    # ---- 处理验证码 ----
     print("🛡 处理 Turnstile...")
     try:
         sb.uc_gui_click_captcha()
@@ -288,11 +311,22 @@ def perform_login_attempt(sb, email, password, attempt_number):
     time.sleep(6)
     screenshot_step(sb, f"attempt_{attempt_number}_after_6s_wait")
 
+    # ---- 提交登录 ----
     print("🔑 点击登录按钮...")
-    sb.uc_click('button:contains("Sign in")')
+    try:
+        sb.wait_for_element(SEL_LOGIN_SUBMIT, timeout=15)
+        sb.uc_click(SEL_LOGIN_SUBMIT)
+    except Exception as e:
+        print(f"⚠️ uc_click 失败，改用 JS 点击: {e}")
+        btn = sb.find_element(SEL_LOGIN_SUBMIT, timeout=10)
+        sb.driver.execute_script(
+            "arguments[0].scrollIntoView({block:'center'});", btn)
+        time.sleep(0.5)
+        sb.driver.execute_script("arguments[0].click();", btn)
     screenshot_step(sb, f"attempt_{attempt_number}_login_clicked")
     sb.sleep(5)
 
+    # ---- 轮询等跳转 ----
     for _ in range(30):
         current_url = sb.get_current_url()
         page_title = sb.get_title() or ""
@@ -308,6 +342,7 @@ def perform_login_attempt(sb, email, password, attempt_number):
             print("✅ 登录成功，已跳转到 dashboard")
             screenshot_step(sb, f"attempt_{attempt_number}_login_success")
             return True, current_url
+
         time.sleep(1)
 
     print(f"❌ 登录尝试 {attempt_number} 失败，当前 URL: {sb.get_current_url()}")
@@ -457,9 +492,10 @@ def _main():
                     f"{base_header}\n\n❌ 登录失败，请检查账号密码、代理或网络\nhttps://therose.cloud/")
             return
 
-        # ---------- 打开 dashboard ----------
-        print("🌐 打开 dashboard...")
-        sb.open(DASHBOARD_URL)
+        # ---------- 确保在 dashboard ----------
+        if "/dashboard" not in sb.get_current_url():
+            print("🌐 打开 dashboard...")
+            sb.open(DASHBOARD_URL)
         handle_consent_if_present(sb)
 
         try:
