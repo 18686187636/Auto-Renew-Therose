@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """
 TheRose Cloud 自动续期脚本
-适配 2025 新版站点：
+适配新版站点：
   - 登录页: https://therose.cloud/login?next=%2Fdashboard
     input[data-testid="login-email"] / input[data-testid="login-password"]
     button[data-testid="login-submit"]
@@ -9,6 +9,7 @@ TheRose Cloud 自动续期脚本
   - 到期时间以倒计时显示（如 "4h 41m 32s"）
   - 续期按钮 data-testid="renew-<uuid>"，可续期窗口 = [到期-30min, 到期]
   - 每次续期延长 6 小时
+兼容 Python 3.10：f-string 表达式内不出现反斜杠。
 """
 
 import os
@@ -97,9 +98,9 @@ def send_tg_photo(bot_token, chat_id, photo_path, caption=""):
         return
     url = f"https://api.telegram.org/bot{bot_token}/sendPhoto"
     try:
-        with open(photo_path, 'rb') as f:
-            files = {'photo': f}
-            data = {'chat_id': chat_id, 'caption': caption}
+        with open(photo_path, "rb") as f:
+            files = {"photo": f}
+            data = {"chat_id": chat_id, "caption": caption}
             resp = requests.post(url, files=files, data=data, timeout=30)
         if resp.status_code == 200:
             print(f"📸 图片已发送: {photo_path}")
@@ -131,7 +132,7 @@ def fmt_beijing(dt_utc):
 
 
 # ========== 倒计时解析 ==========
-def parse_countdown(text: str):
+def parse_countdown(text):
     """
     解析 '4h 41m 32s' / '4h 11m' / '1d 4h' / '30m' / '15s' 为 timedelta。
     无法解析返回 None。
@@ -189,24 +190,26 @@ def get_server_info(sb):
 
     countdown_text = (snap["countdown"] or "").replace("\xa0", " ").strip()
 
-    # 兜底 1：整卡文本里正则捞倒计时
+    # 兜底：整卡文本里正则捞倒计时
     if not re.fullmatch(r"(?:\d+\s*[dhms]\s*)+", countdown_text):
-        m = re.search(r"(\d+\s*d)?\s*(\d+\s*h)?\s*(\d+\s*m)?\s*(\d+\s*s)?",
-                      snap.get("cardText") or "")
+        m = re.search(
+            r"(\d+\s*d)?\s*(\d+\s*h)?\s*(\d+\s*m)?\s*(\d+\s*s)?",
+            snap.get("cardText") or ""
+        )
         if m and any(m.groups()):
             countdown_text = " ".join(g for g in m.groups() if g)
             print(f"⏳ 从卡片文本兜底命中: {countdown_text!r}")
 
     if not countdown_text:
-        raise RuntimeError(f"倒计时文本为空，卡片文本: {snap.get('cardText')!r}")
+        raise RuntimeError("倒计时文本为空，卡片文本: " + repr(snap.get("cardText")))
 
     delta = parse_countdown(countdown_text)
     if delta is None:
-        raise RuntimeError(f"无法解析倒计时文本: {countdown_text!r}")
+        raise RuntimeError("无法解析倒计时文本: " + repr(countdown_text))
 
     expiry_utc = datetime.now(timezone.utc) + delta
 
-    btn_selector = f'button[data-testid="renew-{uuid}"]'
+    btn_selector = 'button[data-testid="renew-' + uuid + '"]'
     return {
         "uuid": uuid,
         "countdown_text": countdown_text,
@@ -225,7 +228,7 @@ def renew_server(sb, uuid, max_wait_seconds=60):
     - 按钮 disabled 但剩余等待 <= max_wait_seconds：等待后重试
     - 否则返回 False（由调用方决定是否调度）
     """
-    sel = f'button[data-testid="renew-{uuid}"]'
+    sel = 'button[data-testid="renew-' + uuid + '"]'
     try:
         btn = wait_el(sb, sel, timeout=15)
     except Exception as e:
@@ -235,12 +238,12 @@ def renew_server(sb, uuid, max_wait_seconds=60):
         text = (btn.text or "").strip()
         m = re.search(r"Renewable in\s+([\dhms ]+?)\s*·", text)
         if not m:
-            return False, f"按钮不可点击，且无法解析等待时间: {text!r}"
+            return False, "按钮不可点击，且无法解析等待时间: " + repr(text)
         wait = parse_countdown(m.group(1))
         if wait is None:
-            return False, f"无法解析等待时长: {m.group(1)!r}"
+            return False, "无法解析等待时长: " + repr(m.group(1))
         if wait.total_seconds() > max_wait_seconds:
-            return False, f"未到可续期窗口（还需 {m.group(1).strip()}）"
+            return False, "未到可续期窗口（还需 " + m.group(1).strip() + "）"
         print(f"⏳ 等待 {wait} 后重试点击...")
         time.sleep(wait.total_seconds() + 3)
         try:
@@ -272,7 +275,7 @@ def verify_renewal(sb, uuid, old_expiry_utc):
             return False, "刷新后取不到服务器卡片", None
         new_delta = parse_countdown(snap["countdown"])
         if new_delta is None:
-            return False, f"刷新后倒计时解析失败: {snap['countdown']!r}", None
+            return False, "刷新后倒计时解析失败: " + repr(snap["countdown"]), None
         new_expiry = datetime.now(timezone.utc) + new_delta
         gain_sec = (new_expiry - old_expiry_utc).total_seconds()
         if gain_sec > 1800:
@@ -291,8 +294,8 @@ def handle_consent_if_present(sb):
         'button:contains("同意")',
         'button:contains("Accept all")',
         'button:contains("Allow")',
-        '#consent-button',
-        '.consent-btn',
+        "#consent-button",
+        ".consent-btn",
         '[data-consent="accept"]',
     ]
     for selector in selectors:
@@ -312,7 +315,7 @@ def handle_consent_if_present(sb):
     return False
 
 
-# ========== 登录（新版：data-testid 选择器） ==========
+# ========== 登录 ==========
 def perform_login_attempt(sb, email, password, attempt_number):
     print(f"\n🔄 登录尝试 {attempt_number}/2")
     print("🌐 打开登录页面...")
@@ -435,7 +438,9 @@ def schedule_via_cronjob(trigger_timestamp, gh_token, repo, workflow_id, api_key
         "expiresAt": int((dt + timedelta(minutes=30)).timestamp()),
     }
 
-    dispatch_url = f"https://api.github.com/repos/{repo}/actions/workflows/{workflow_id}/dispatches"
+    dispatch_url = (
+        f"https://api.github.com/repos/{repo}/actions/workflows/{workflow_id}/dispatches"
+    )
 
     payload = {
         "job": {
@@ -475,20 +480,23 @@ def schedule_via_cronjob(trigger_timestamp, gh_token, repo, workflow_id, api_key
         for job in matching[1:]:
             jid = job.get("jobId")
             if jid:
-                r = requests.delete(f"https://api.cron-job.org/jobs/{jid}", headers=headers, timeout=30)
+                r = requests.delete(
+                    f"https://api.cron-job.org/jobs/{jid}", headers=headers, timeout=30)
                 print(f"🗑️ 删除多余 job {jid}: {r.status_code}")
 
         if matching:
             jid = matching[0].get("jobId")
-            r = requests.patch(f"https://api.cron-job.org/jobs/{jid}",
-                               headers=headers, json=payload, timeout=30)
+            r = requests.patch(
+                f"https://api.cron-job.org/jobs/{jid}",
+                headers=headers, json=payload, timeout=30)
             if r.status_code == 200:
                 print(f"✅ 任务已更新，ID: {jid}")
                 return True
             print(f"❌ 更新任务失败: {r.status_code} {r.text}")
             return False
 
-        r = requests.put("https://api.cron-job.org/jobs", headers=headers, json=payload, timeout=30)
+        r = requests.put(
+            "https://api.cron-job.org/jobs", headers=headers, json=payload, timeout=30)
         if r.status_code == 200:
             print(f"✅ 新任务已创建，ID: {r.json().get('jobId')}")
             return True
@@ -531,7 +539,7 @@ def _main():
     )
 
     with SB(uc=True, headless=False, proxy=PROXY_SERVER or None,
-            page_load_strategy='eager') as sb:
+            page_load_strategy="eager") as sb:
         try:
             sb.driver.set_page_load_timeout(120)
             sb.driver.set_script_timeout(120)
@@ -545,8 +553,10 @@ def _main():
             send_tg_photo(TG_BOT_TOKEN, TG_CHAT_ID, login_img, caption="🖼 登录结果")
 
         if not ok:
-            send_tg(TG_BOT_TOKEN, TG_CHAT_ID,
-                    f"{base_header}\n\n❌ 登录失败，请检查账号密码、代理或网络\nhttps://therose.cloud/")
+            send_tg(
+                TG_BOT_TOKEN, TG_CHAT_ID,
+                base_header + "\n\n❌ 登录失败，请检查账号密码、代理或网络\nhttps://therose.cloud/"
+            )
             return
 
         # ---------- 确保在 dashboard ----------
@@ -564,23 +574,31 @@ def _main():
                 html = sb.get_page_source()
                 with open("dashboard_dump.html", "w", encoding="utf-8") as f:
                     f.write(html)
+
                 ids = re.findall(
                     r'data-testid="([^"]*(?:countdown|renew|server|expiry|time)[^"]*)"',
                     html, re.I)
-                print(f"🔎 页面相关 testid: {sorted(set(ids))}")
-                print(f"🔎 trc- class: {sorted(set(re.findall(r'class=\"(trc-[^\"]*)\"', html)))}")
+                trc_classes = re.findall(r'class="(trc-[^"]*)"', html)
+
+                # 正则先算好再拼接，避免 f-string 内出现反斜杠（Py3.10 限制）
+                ids_str = str(sorted(set(ids)))
+                cls_str = str(sorted(set(trc_classes)))
+                print("🔎 页面相关 testid: " + ids_str)
+                print("🔎 trc- class: " + cls_str)
             except Exception as e2:
                 print(f"dump 失败: {e2}")
             screenshot_step(sb, "dashboard_parse_failed")
-            send_tg(TG_BOT_TOKEN, TG_CHAT_ID,
-                    f"{base_header}\n\n❌ 读取服务器信息失败: {e}")
+            send_tg(
+                TG_BOT_TOKEN, TG_CHAT_ID,
+                base_header + "\n\n❌ 读取服务器信息失败: " + str(e)
+            )
             return
 
         screenshot_step(sb, "dashboard_loaded")
         time_info = (
-            f"\n⏰ 到期(北京): {fmt_beijing(info['expiry_utc'])}"
-            f"\n📉 剩余: {info['countdown_text']}"
-            f"\n🔘 按钮: {info['renew_btn_text']}"
+            "\n⏰ 到期(北京): " + fmt_beijing(info["expiry_utc"]) +
+            "\n📉 剩余: " + info["countdown_text"] +
+            "\n🔘 按钮: " + info["renew_btn_text"]
         )
         print(time_info)
 
@@ -588,12 +606,16 @@ def _main():
         if not info["renew_btn_enabled"]:
             next_at = _next_trigger(info["expiry_utc"])
             if _try_schedule(next_at, "（窗口未到）"):
-                send_tg(TG_BOT_TOKEN, TG_CHAT_ID,
-                        f"{base_header}\n\n⏳ 未到续期窗口，已调度到 "
-                        f"{fmt_beijing(next_at)}{time_info}")
+                send_tg(
+                    TG_BOT_TOKEN, TG_CHAT_ID,
+                    base_header + "\n\n⏳ 未到续期窗口，已调度到 " +
+                    fmt_beijing(next_at) + time_info
+                )
             else:
-                send_tg(TG_BOT_TOKEN, TG_CHAT_ID,
-                        f"{base_header}\n\n⏳ 未到续期窗口（调度未生效）{time_info}")
+                send_tg(
+                    TG_BOT_TOKEN, TG_CHAT_ID,
+                    base_header + "\n\n⏳ 未到续期窗口（调度未生效）" + time_info
+                )
             return
 
         # ---------- 点击续期 ----------
@@ -602,7 +624,7 @@ def _main():
         screenshot_step(sb, "renew_clicked")
 
         if not clicked:
-            msg = f"{base_header}\n\n❌ 续期点击失败: {click_msg}{time_info}"
+            msg = base_header + "\n\n❌ 续期点击失败: " + click_msg + time_info
             print(msg)
             send_tg(TG_BOT_TOKEN, TG_CHAT_ID, msg)
             if FORCE_SCHEDULE:
@@ -619,15 +641,15 @@ def _main():
 
         if success:
             msg = (
-                f"{base_header}\n\n✅ 续期成功！{vmsg}"
-                f"\n⏰ 新到期(北京): {fmt_beijing(new_expiry)}"
+                base_header + "\n\n✅ 续期成功！" + vmsg +
+                "\n⏰ 新到期(北京): " + fmt_beijing(new_expiry)
             )
             print(msg)
             send_tg(TG_BOT_TOKEN, TG_CHAT_ID, msg)
             next_at = _next_trigger(new_expiry)
             _try_schedule(next_at, "（下次续期）")
         else:
-            msg = f"{base_header}\n\n⚠️ 续期可能失败: {vmsg}{time_info}"
+            msg = base_header + "\n\n⚠️ 续期可能失败: " + vmsg + time_info
             print(msg)
             send_tg(TG_BOT_TOKEN, TG_CHAT_ID, msg)
             if FORCE_SCHEDULE:
@@ -644,8 +666,11 @@ def main():
         tb = traceback.format_exc()
         print(tb)
         try:
-            send_tg(TG_BOT_TOKEN, TG_CHAT_ID,
-                    f"💥 脚本异常退出\n{EMAIL}\n{type(e).__name__}: {e}\n{tb[-1500:]}")
+            send_tg(
+                TG_BOT_TOKEN, TG_CHAT_ID,
+                "💥 脚本异常退出\n" + EMAIL + "\n" +
+                type(e).__name__ + ": " + str(e) + "\n" + tb[-1500:]
+            )
         except Exception:
             pass
         raise
