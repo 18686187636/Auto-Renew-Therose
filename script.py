@@ -473,7 +473,13 @@ def schedule_via_cronjob(trigger_timestamp, gh_token, repo, workflow_id, api_key
         jobs = resp.json().get("jobs", [])
         print("📋 现有任务数量: " + str(len(jobs)))
 
-        matching = [j for j in jobs if j.get("url") == dispatch_url]
+        # 【修改点】改为按 URL 前缀宽松匹配，避免 workflow 文件名大小写或尾部斜杠导致重复创建
+        prefix = "https://api.github.com/repos/" + repo + "/actions/workflows/"
+        matching = [j for j in jobs if (j.get("url") or "").startswith(prefix)]
+        
+        # 【修改点】按 jobId 排序，保留最新的一个，其余删除
+        matching.sort(key=lambda x: x.get("jobId", 0), reverse=True)
+        
         for job in matching[1:]:
             jid = job.get("jobId")
             if jid:
@@ -491,6 +497,16 @@ def schedule_via_cronjob(trigger_timestamp, gh_token, repo, workflow_id, api_key
             print("❌ 更新任务失败: " + str(r.status_code) + " " + r.text)
             return False
 
+        r = requests.put("https://api.cron-job.org/jobs", headers=headers,
+                         json=payload, timeout=30)
+        if r.status_code == 200:
+            print("✅ 新任务已创建，ID: " + str(r.json().get("jobId")))
+            return True
+        print("❌ 创建任务失败: " + str(r.status_code) + " " + r.text)
+        return False
+    except Exception as e:
+        print("❌ cron-job.org API 异常: " + str(e))
+        return False
         r = requests.put("https://api.cron-job.org/jobs", headers=headers,
                          json=payload, timeout=30)
         if r.status_code == 200:
