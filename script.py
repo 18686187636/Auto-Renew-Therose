@@ -447,7 +447,7 @@ def schedule_via_cronjob(trigger_timestamp, gh_token, repo, workflow_id, api_key
         "months": [dt.month],
         "wdays": [-1],
         "timezone": "UTC",
-        "expiresAt": int((dt + timedelta(minutes=30)).timestamp()),
+        "expiresAt": (dt + timedelta(hours=2)).strftime("%Y%m%d%H%M%S"),
     }
 
     dispatch_url = ("https://api.github.com/repos/" + repo
