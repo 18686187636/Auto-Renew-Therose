@@ -1,312 +1,412 @@
-import time
-import json
-import re
-import traceback
-import tempfile
-import random
+#!/usr/bin/env python3
+"""TheRose Cloud 自动续期脚本（兼容 Python 3.10，f-string 内无反斜杠）"""
+import os, sys, time, re, json, traceback, requests
 from datetime import datetime, timedelta, timezone
-
-import requests
 from seleniumbase import SB
-from Xvfb import Xvfb
 
-# ==================== 配置常量 ====================
-# 请确保在运行环境或脚本上方已定义以下变量
-# EMAIL, PASSWORD, PROXY_SERVER
-# TG_BOT_TOKEN, TG_CHAT_ID
-# GH_TOKEN, GH_REPO, GH_WORKFLOW_ID, CRONJOB_API_KEY
-# DASHBOARD_URL, SEL_SERVER_CARD
-# MINUTES_BEFORE_EXPIRY, RETRY_AFTER_MINUTES, MAX_CAPTCHA, FORCE_SCHEDULE
+EMAIL = os.environ.get("EMAIL") or ""
+PASSWORD = os.environ.get("PASSWORD") or ""
+TG_BOT_TOKEN = os.environ.get("TG_BOT_TOKEN") or ""
+TG_CHAT_ID = os.environ.get("TG_CHAT_ID") or ""
+PROXY_SERVER = os.environ.get("PROXY_SERVER") or ""
+CRONJOB_API_KEY = os.environ.get("CRONJOB_API_KEY") or ""
+GH_TOKEN = os.environ.get("GH_TOKEN") or ""
+GH_REPO = os.environ.get("GH_REPO") or ""
+GH_WORKFLOW_ID = os.environ.get("GH_WORKFLOW_ID") or ""
 
-# ==================== 工具函数 ====================
-def fmt_beijing(dt):
-    return dt.astimezone(timezone(timedelta(hours=8))).strftime("%Y-%m-%d %H:%M:%S")
+# 已废弃，失败分支现在无条件调度；保留仅为兼容旧 workflow
+FORCE_SCHEDULE = os.environ.get("FORCE_SCHEDULE", "false").lower() == "true"
 
-def get_beijing_time():
-    return datetime.now(timezone(timedelta(hours=8))).strftime("%Y-%m-%d %H:%M:%S")
+BASE_URL = "https://therose.cloud/login?next=%2Fdashboard"
+DASHBOARD_URL = "https://therose.cloud/dashboard"
 
-def get_current_ip(proxy=None):
+SEL_LOGIN_EMAIL = 'input[data-testid="login-email"]'
+SEL_LOGIN_PASSWORD = 'input[data-testid="login-password"]'
+SEL_LOGIN_SUBMIT = 'button[data-testid="login-submit"]'
+SEL_SERVER_CARD = 'div.trc-server[data-testid^="server-"]'
+
+# 站点窗口 = 到期前 30 分钟；提前 28 分钟唤醒留缓冲
+MINUTES_BEFORE_EXPIRY = 28
+RETRY_AFTER_MINUTES = 5
+BEIJING_TZ = timezone(timedelta(hours=8))
+
+if not EMAIL or not PASSWORD:
+    print("❌ 请设置环境变量 EMAIL 和 PASSWORD")
+    sys.exit(1)
+
+
+def screenshot_step(sb, step_name):
+    filename = "step_" + step_name + "_" + str(int(time.time() * 1000)) + ".png"
     try:
-        r = requests.get("https://api.ipify.org?format=json", proxies={"http": proxy, "https": proxy} if proxy else None, timeout=10)
-        return r.json().get("ip", "未知")
-    except Exception:
-        return "获取失败"
-
-def mask_url(url):
-    return url[:50] + "..." if len(url) > 50 else url
-
-def screenshot_step(sb, tag):
-    try:
-        path = tempfile.mktemp(suffix=".png")
-        sb.get_screenshot(path)
-        return path
+        sb.save_screenshot(filename)
+        print("📸 截图已保存: " + filename)
+        return filename
     except Exception as e:
         print("⚠️ 截图失败: " + str(e))
         return None
 
-def send_tg(token, chat_id, text):
+
+def wait_el(sb, selector, timeout=20):
+    """返回原生 WebElement，仅用于读属性 / is_enabled / 点击。文本输入请用 sb.type。"""
+    sb.wait_for_element(selector, timeout=timeout)
+    return sb.find_element(selector)
+
+
+def safe_execute_script(sb, script, *args, retries=3, delay=2.0):
+    """execute_script 带重试 + 探活，规避 chromedriver 瞬时 connection refused。"""
+    last_err = None
+    for i in range(retries):
+        try:
+            return sb.driver.execute_script(script, *args)
+        except Exception as e:
+            last_err = e
+            print("⚠️ execute_script 第 " + str(i + 1) + "/" + str(retries) + " 次失败: " + str(e))
+            if i < retries - 1:
+                time.sleep(delay)
+                try:
+                    _ = sb.driver.current_url
+                    print("ℹ️ driver 探活正常，继续重试")
+                except Exception as e2:
+                    print("⚠️ driver 探活失败: " + str(e2))
+    raise last_err
+
+
+def send_tg(token, chat_id, message):
     if not token or not chat_id:
         return
     try:
-        requests.post(f"https://api.telegram.org/bot{token}/sendMessage",
-                      json={"chat_id": chat_id, "text": text, "parse_mode": "HTML"}, timeout=30)
+        resp = requests.post(
+            "https://api.telegram.org/bot" + token + "/sendMessage",
+            json={"chat_id": chat_id, "text": message}, timeout=10)
+        print("📨 Telegram 通知已发送" if resp.status_code == 200
+              else "❌ Telegram 发送失败: " + resp.text)
     except Exception as e:
-        print("❌ 发送TG消息失败: " + str(e))
+        print("❌ Telegram 发送异常: " + str(e))
 
-def send_tg_photo(token, chat_id, photo_path, caption="", parse_mode=None):
-    if not token or not chat_id:
+
+def send_tg_photo(bot_token, chat_id, photo_path, caption=""):
+    if not bot_token or not chat_id or not photo_path:
         return
     try:
         with open(photo_path, "rb") as f:
-            requests.post(f"https://api.telegram.org/bot{token}/sendPhoto",
-                          data={"chat_id": chat_id, "caption": caption, "parse_mode": parse_mode},
-                          files={"photo": f}, timeout=30)
+            resp = requests.post(
+                "https://api.telegram.org/bot" + bot_token + "/sendPhoto",
+                files={"photo": f},
+                data={"chat_id": chat_id, "caption": caption}, timeout=30)
+        print("📸 图片已发送: " + photo_path if resp.status_code == 200
+              else "❌ 发送图片失败: " + resp.text)
     except Exception as e:
-        print("❌ 发送TG图片失败: " + str(e))
+        print("❌ 发送图片异常: " + str(e))
 
-# ==================== reCAPTCHA 相关 ====================
-def find_recaptcha_frame(page, frame_type):
-    # 实际实现需根据页面结构调整
-    return page.find_element("iframe[title*='recaptcha']")
 
-def is_recaptcha_solved(page):
-    return "success" in (page.get_text() or "").lower()
-
-def is_blocked(page):
-    return "blocked" in (page.get_text() or "").lower()
-
-def click_recaptcha_checkbox(page):
-    page.click("iframe[title*='recaptcha']")
-
-def switch_to_audio(page):
+def get_current_ip(proxy_server=None):
+    proxies = {"http": proxy_server, "https": proxy_server} if proxy_server else None
     try:
-        page.click("button[title*='audio']")
-        return True
-    except Exception:
-        return False
+        r = requests.get("https://api.ip.sb/ip", proxies=proxies, timeout=15)
+        return r.text.strip() if r.status_code == 200 else "获取失败 (HTTP " + str(r.status_code) + ")"
+    except Exception as e:
+        return "获取失败: " + str(e)
 
-def get_audio_url(page):
-    try:
-        return page.find_element("audio source").get_attribute("src")
-    except Exception:
+
+def get_beijing_time():
+    return datetime.now(BEIJING_TZ).strftime("%Y-%m-%d %H:%M:%S")
+
+
+def fmt_beijing(dt_utc):
+    return dt_utc.astimezone(BEIJING_TZ).strftime("%Y-%m-%d %H:%M:%S")
+
+
+def parse_countdown(text):
+    """解析 '4h 41m 32s' / '4h 11m' / '1d 4h' / '30m' / '15s'，失败返回 None。"""
+    text = (text or "").strip().replace("\xa0", " ")
+    text = re.sub(r"^(Renews?\s+in|Renewable\s+in)\s+", "", text, flags=re.I).strip()
+    if not text:
         return None
+    m = re.fullmatch(
+        r"(?:(\d+)\s*d)?\s*(?:(\d+)\s*h)?\s*(?:(\d+)\s*m)?\s*(?:(\d+)\s*s)?", text)
+    if not m or not any(m.groups()):
+        return None
+    d, h, mi, s = (int(x) if x else 0 for x in m.groups())
+    return timedelta(days=d, hours=h, minutes=mi, seconds=s)
 
-def reload_challenge(page):
-    page.click("button[title*='reload']")
 
-def download_audio(audio_url):
-    headers = {
-        "Referer": "https://www.google.com/",
-        "User-Agent": "Mozilla/5.0"
-    }
-    urls = [audio_url]
-    if "recaptcha.net" in audio_url:
-        urls.append(audio_url.replace("recaptcha.net", "www.google.com"))
-    elif "google.com" in audio_url:
-        urls.append(audio_url.replace("www.google.com", "recaptcha.net"))
-    
-    for u in urls:
-        try:
-            r = requests.get(u, headers=headers, timeout=30)
-            r.raise_for_status()
-            if len(r.content) < 1000:
-                continue
-            path = tempfile.mktemp(suffix=".mp3")
-            with open(path, "wb") as f:
-                f.write(r.content)
-            return path
-        except Exception:
-            pass
-    return None
+JS_SNAPSHOT = r"""
+const card = document.querySelector('div.trc-server[data-testid^="server-"]');
+if (!card) return null;
+const testid = card.getAttribute('data-testid') || '';
+const uuid = testid.replace('server-', '');
+const cd = card.querySelector('[data-testid="countdown-' + uuid + '"]');
+let timeEl = cd ? cd.querySelector('[class*="countdown-time"]') : null;
+let cdText = timeEl ? (timeEl.textContent || '').trim() : (cd ? (cd.textContent || '').trim() : '');
+const btn = card.querySelector('[data-testid="renew-' + uuid + '"]');
+return {
+  uuid: uuid,
+  countdown: cdText,
+  btnText: btn ? (btn.textContent || '').trim() : '',
+  btnDisabled: btn ? !!btn.disabled : null,
+  btnExists: !!btn,
+  cardText: (card.textContent || '').trim()
+};
+"""
 
-def recognize_audio(mp3_path):
-    # 实际需接入语音识别API
-    return "test"
+# 单位后不能紧跟字母数字，排除 "1 server" 里的 "1 s"
+COUNTDOWN_FRAGMENT = r"((?:\d+\s*[dhms](?![a-zA-Z0-9])\s*){1,4})"
 
-def fill_and_verify(page, text):
-    page.type("input[type='text']", text)
-    page.click("button[aria-label*='Verify']")
 
-class CaptchaBlocked(Exception):
-    pass
+def snapshot_server_from_html(html):
+    """execute_script 彻底失败时的兜底：从页面源码正则解析。"""
+    m = re.search(r'data-testid="server-([0-9a-fA-F\-]{36})"', html)
+    if not m:
+        return None
+    uuid = m.group(1)
 
-def solve_recaptcha(page):
-    start = time.time()
-    while time.time() - start < 15:
-        if find_recaptcha_frame(page, "anchor"):
-            break
-        time.sleep(1)
+    cd = None
+    pat_cd = (r'data-testid="countdown-' + re.escape(uuid)
+              + r'"[^>]*>.*?class="trc-countdown-time[^"]*"[^>]*>([^<]+)<')
+    mc = re.search(pat_cd, html, re.S)
+    if mc:
+        cd = mc.group(1).strip()
     else:
-        raise RuntimeError("reCAPTCHA 加载超时")
+        idx = html.find('data-testid="countdown-' + uuid + '"')
+        if idx != -1:
+            ms = re.search(COUNTDOWN_FRAGMENT, html[idx:idx + 800])
+            if ms:
+                cd = ms.group(1).strip()
+                print("ℹ️ 倒计时走 testid 邻近兜底提取")
 
-    dl_fails = 0
-    for i in range(MAX_CAPTCHA):
-        if is_recaptcha_solved(page):
-            return True
-        if is_blocked(page):
-            raise CaptchaBlocked("IP 被 Google reCAPTCHA 封锁")
+    btn_text, btn_disabled, btn_exists = "", None, False
+    pat_btn_tag = r'<button[^>]*data-testid="renew-' + re.escape(uuid) + r'"[^>]*>'
+    mt = re.search(pat_btn_tag, html, re.S)
+    if mt:
+        btn_exists = True
+        btn_disabled = bool(re.search(r'\bdisabled\b', mt.group(0)))
+        mf = re.search(pat_btn_tag + r'(.*?)</button>', html, re.S)
+        if mf:
+            btn_text = re.sub(r'<[^>]+>', '', mf.group(1)).strip()
 
-        if i == 0:
-            click_recaptcha_checkbox(page)
-            time.sleep(2)
-            if is_recaptcha_solved(page):
-                return True
+    if not cd:
+        return None
+    return {"uuid": uuid, "countdown": cd, "btnText": btn_text,
+            "btnDisabled": btn_disabled, "btnExists": btn_exists, "cardText": ""}
 
-        if not is_audio_mode(page):
-            if not switch_to_audio(page):
-                time.sleep(3)
-                if not switch_to_audio(page):
-                    click_recaptcha_checkbox(page)
-                    time.sleep(3)
-                    continue
-            time.sleep(random.uniform(2, 4))
 
-        if is_blocked(page):
-            raise CaptchaBlocked("音频模式检测到 IP 被封锁")
-
-        audio_url = get_audio_url(page)
-        if not audio_url:
-            reload_challenge(page)
-            continue
-
-        mp3 = download_audio(audio_url)
-        if not mp3:
-            dl_fails += 1
-            if dl_fails >= 3:
-                raise RuntimeError("音频连续下载失败")
-            reload_challenge(page)
-            time.sleep(random.uniform(3, 6))
-            continue
-        dl_fails = 0
-
-        text = recognize_audio(mp3)
-        try:
-            os.remove(mp3)
-        except Exception:
-            pass
-        if not text:
-            reload_challenge(page)
-            time.sleep(3)
-            continue
-
-        print(f"识别结果: [{text}]")
-        fill_and_verify(page, text)
-        time.sleep(5)
-        if is_recaptcha_solved(page):
-            return True
-        reload_challenge(page)
-        time.sleep(random.uniform(2, 4))
-
-    raise RuntimeError("验证码达到最大尝试次数")
-
-# ==================== 页面元素获取 ====================
-def get_server_name(page):
+def snapshot_server(sb):
+    """优先 JS 快照；失败则用页面源码正则兜底。"""
+    sb.wait_for_element(SEL_SERVER_CARD, timeout=30)
     try:
-        ele = page.ele('#serverName', timeout=2)
-        if ele:
-            return ele.text.strip()
+        sb.wait_for_ready_state_complete()
     except Exception:
         pass
-    return "未知"
+    time.sleep(2)
 
-def get_expire_time(page):
     try:
-        ele = page.ele('#expireDate', timeout=2)
-        if ele:
-            return ele.text.strip()
-    except Exception:
-        pass
-    selectors = ['text:Expires in:', 'text:Deletes on:']
-    for selector in selectors:
-        try:
-            ele = page.ele(selector, timeout=1)
-            if ele:
-                text = (ele.text or "").strip()
-                if ":" in text:
-                    return text.split(":", 1)[1].strip()
-                if text:
-                    return text
-        except Exception:
-            pass
-    return "未知"
-
-def build_notification(success, url, server_name, old_expire, new_expire=None, failure_reason=""):
-    masked = mask_url(url)
-    if success:
-        lines = [
-            "✅ 续订成功",
-            "",
-            f"服务器：{server_name}",
-            f"到期: {old_expire} -> {new_expire}",
-            f"URL: {url}",
-        ]
-    else:
-        lines = [
-            "❌ 续订失败",
-            "",
-            f"服务器：{server_name}",
-            f"URL: {url}",
-        ]
-        if failure_reason:
-            lines.append(f"失败原因: {failure_reason}")
-    lines.append("")
-    lines.append("Host2Play Auto Renew")
-    return "\n".join(lines)
-
-def capture_page_screenshot(page, file_name):
-    try:
-        page.get_screenshot(path=file_name)
-        return file_name
+        snap = safe_execute_script(sb, JS_SNAPSHOT)
+        if snap:
+            return snap
+        print("⚠️ JS 快照返回空，转 HTML 兜底")
     except Exception as e:
-        print(f"截图失败: {e}", "WARN")
-        return None
+        print("⚠️ JS 快照彻底失败: " + str(e) + "，转 HTML 兜底")
 
-def handle_consent_if_present(sb):
-    consent_btn = sb.ele('tag:button@@text():Consent', timeout=2)
-    if consent_btn:
-        consent_btn.click()
-        time.sleep(3)
+    snap = snapshot_server_from_html(sb.get_page_source())
+    if snap:
+        print("✅ HTML 兜底解析成功")
+    return snap
+
 
 def get_server_info(sb):
-    # 实际实现需根据页面DOM解析
+    snap = snapshot_server(sb)
+    if not snap:
+        raise RuntimeError("JS 快照与 HTML 兜底均无法解析服务器卡片")
+
+    uuid = snap["uuid"]
+    print("🔍 服务器 UUID: " + uuid)
+    countdown_text = (snap["countdown"] or "").replace("\xa0", " ").strip()
+
+    if not re.fullmatch(r"(?:\d+\s*[dhms]\s*)+", countdown_text):
+        m = re.search(COUNTDOWN_FRAGMENT, snap.get("cardText") or "")
+        if m:
+            countdown_text = m.group(1).strip()
+            print("⏳ 从卡片文本兜底命中: " + repr(countdown_text))
+
+    if not countdown_text:
+        raise RuntimeError("倒计时文本为空，卡片文本: " + repr(snap.get("cardText")))
+
+    delta = parse_countdown(countdown_text)
+    if delta is None:
+        raise RuntimeError("无法解析倒计时文本: " + repr(countdown_text))
+
     return {
-        "uuid": "test-uuid",
-        "expiry_utc": datetime.now(timezone.utc) + timedelta(days=1),
-        "countdown_text": "1天",
-        "renew_btn_enabled": True,
-        "renew_btn_text": "Renew server"
+        "uuid": uuid,
+        "countdown_text": countdown_text,
+        "expiry_utc": datetime.now(timezone.utc) + delta,
+        "renew_btn_selector": 'button[data-testid="renew-' + uuid + '"]',
+        "renew_btn_enabled": bool(snap["btnExists"]) and not snap["btnDisabled"],
+        "renew_btn_text": snap["btnText"],
     }
 
+
 def renew_server(sb, uuid, max_wait_seconds=60):
+    sel = 'button[data-testid="renew-' + uuid + '"]'
     try:
-        btn = sb.ele('xpath://button[contains(text(), "Renew server")]', timeout=3)
-        if btn:
-            btn.click()
-        time.sleep(5)
+        btn = wait_el(sb, sel, timeout=15)
+    except Exception as e:
+        return False, "找不到续期按钮: " + str(e)
+
+    if not btn.is_enabled():
+        text = (btn.text or "").strip()
+        m = re.search(r"Renewable in\s+([\dhms ]+?)\s*·", text)
+        if not m:
+            m = re.search(r"Renewable in\s+([\dhms ]+)", text)
+        if not m:
+            return False, "按钮不可点击，且无法解析等待时间: " + repr(text)
+        wait = parse_countdown(m.group(1))
+        if wait is None:
+            return False, "无法解析等待时长: " + repr(m.group(1))
+        if wait.total_seconds() > max_wait_seconds:
+            return False, "未到可续期窗口（还需 " + m.group(1).strip() + "）"
+        print("⏳ 等待 " + str(wait) + " 后重试点击...")
+        time.sleep(wait.total_seconds() + 3)
+        try:
+            btn = wait_el(sb, sel, timeout=15)
+        except Exception as e:
+            return False, "等待后仍找不到续期按钮: " + str(e)
+
+    try:
+        safe_execute_script(sb, "arguments[0].scrollIntoView({block:'center'});", btn)
+        time.sleep(0.5)
+        safe_execute_script(sb, "arguments[0].click();", btn)
         return True, "点击成功"
     except Exception as e:
-        return False, str(e)
+        return False, "点击异常: " + str(e)
 
-def verify_renewal(sb, uuid, old_expiry):
+
+def verify_renewal(sb, uuid, old_expiry_utc):
     time.sleep(5)
-    new_expire_str = get_expire_time(sb)
-    if new_expire_str != "未知":
-        return True, "验证成功", datetime.now(timezone.utc) + timedelta(days=2)
-    return False, "验证失败", None
+    try:
+        sb.refresh()
+        sb.wait_for_ready_state_complete()
+        time.sleep(3)
+        snap = snapshot_server(sb)
+        if not snap:
+            return False, "刷新后取不到服务器卡片", None
+        new_delta = parse_countdown(snap["countdown"])
+        if new_delta is None:
+            return False, "刷新后倒计时解析失败: " + repr(snap["countdown"]), None
+        new_expiry = datetime.now(timezone.utc) + new_delta
+        gain_sec = (new_expiry - old_expiry_utc).total_seconds()
+        if gain_sec > 1800:
+            return True, "延长约 " + ("%.1f" % (gain_sec / 3600)) + " 小时", new_expiry
+        return False, "到期时间未显著延长（" + str(int(gain_sec / 60)) + " 分钟）", new_expiry
+    except Exception as e:
+        return False, "验证失败: " + str(e), None
 
-# ==================== 登录逻辑 ====================
+
+def handle_consent_if_present(sb):
+    try:
+        src = sb.get_page_source() or ""
+        if not re.search(r"(consent|cookie|agree|accept)", src, re.I):
+            print("ℹ️ 页面无 consent 相关字样，跳过检测")
+            return False
+    except Exception:
+        pass
+
+    selectors = [
+        'button:contains("Consent")', 'button:contains("Accept")',
+        'button:contains("I agree")', 'button:contains("同意")',
+        'button:contains("Accept all")', 'button:contains("Allow")',
+        "#consent-button", ".consent-btn", '[data-consent="accept"]',
+    ]
+    for selector in selectors:
+        try:
+            btn = sb.find_element(selector, timeout=1)
+            if btn and btn.is_displayed():
+                safe_execute_script(sb, "arguments[0].scrollIntoView({block:'center'});", btn)
+                time.sleep(0.5)
+                safe_execute_script(sb, "arguments[0].click();", btn)
+                print("✅ 已点击 Consent 按钮: " + selector)
+                time.sleep(1)
+                return True
+        except Exception:
+            continue
+    print("ℹ️ 未检测到 Consent 按钮")
+    return False
+
+
 def perform_login_attempt(sb, email, password, attempt_number):
-    sb.open("https://therose.cloud/login")
-    time.sleep(3)
-    sb.type("input[type='email']", email)
-    sb.type("input[type='password']", password)
-    sb.click("button[type='submit']")
-    time.sleep(5)
-    if "dashboard" in sb.get_current_url():
-        return True, sb.get_current_url()
+    tag = "attempt_" + str(attempt_number)
+    print("\n🔄 登录尝试 " + str(attempt_number) + "/2")
+    print("🌐 打开登录页面...")
+    sb.open(BASE_URL)
+    sb.wait_for_ready_state_complete()
+    sb.sleep(2)
+    screenshot_step(sb, tag + "_page_loaded")
+
+    print("📧 等待邮箱输入框...")
+    sb.wait_for_element(SEL_LOGIN_EMAIL, timeout=30)
+    sb.type(SEL_LOGIN_EMAIL, email, timeout=15)
+    print("✅ 邮箱已填写")
+    screenshot_step(sb, tag + "_email_filled")
+
+    print("🔑 等待密码输入框...")
+    sb.wait_for_element(SEL_LOGIN_PASSWORD, timeout=15)
+    sb.type(SEL_LOGIN_PASSWORD, password, timeout=15)
+    print("✅ 密码已填写")
+    screenshot_step(sb, tag + "_password_filled")
+
+    print("⏳ 等待 Turnstile iframe 出现...")
+    try:
+        sb.wait_for_element('iframe[src*="challenges.cloudflare.com"]', timeout=60)
+        print("✅ Turnstile iframe 已出现")
+    except Exception:
+        print("⚠️ 未检测到 Turnstile iframe，可能无需验证")
+    time.sleep(10)
+    screenshot_step(sb, tag + "_before_captcha")
+
+    print("🛡 处理 Turnstile...")
+    try:
+        sb.uc_gui_click_captcha()
+        print("✅ Turnstile 已处理")
+    except Exception as e:
+        print("⚠️ uc_gui_click_captcha 异常: " + str(e))
+    screenshot_step(sb, tag + "_captcha_handled")
+
+    time.sleep(6)
+    screenshot_step(sb, tag + "_after_6s_wait")
+
+    print("🔑 点击登录按钮...")
+    try:
+        sb.wait_for_element(SEL_LOGIN_SUBMIT, timeout=15)
+        sb.uc_click(SEL_LOGIN_SUBMIT)
+    except Exception as e:
+        print("⚠️ uc_click 失败，改用 JS 点击: " + str(e))
+        try:
+            btn = wait_el(sb, SEL_LOGIN_SUBMIT, timeout=10)
+            safe_execute_script(sb, "arguments[0].scrollIntoView({block:'center'});", btn)
+            time.sleep(0.5)
+            safe_execute_script(sb, "arguments[0].click();", btn)
+        except Exception as e2:
+            print("⚠️ JS 点击也失败: " + str(e2))
+    screenshot_step(sb, tag + "_login_clicked")
+    sb.sleep(5)
+
+    for _ in range(30):
+        current_url = sb.get_current_url()
+        print("📄 当前 URL: " + current_url + " | Title: " + (sb.get_title() or ""))
+        if "chrome-error" in current_url:
+            print("⚠️ chrome-error，刷新重试...")
+            sb.refresh()
+            sb.sleep(3)
+            continue
+        if "/dashboard" in current_url:
+            print("✅ 登录成功，已跳转到 dashboard")
+            screenshot_step(sb, tag + "_login_success")
+            return True, current_url
+        time.sleep(1)
+
     print("❌ 登录尝试 " + str(attempt_number) + " 失败，当前 URL: " + sb.get_current_url())
-    screenshot_step(sb, "login_failed_" + str(attempt_number))
+    screenshot_step(sb, tag + "_login_failed")
     return False, sb.get_current_url()
+
 
 def login(sb, email, password):
     try:
@@ -318,9 +418,9 @@ def login(sb, email, password):
         ok, url = perform_login_attempt(sb, email, password, attempt)
         if ok:
             return True, url
-    return False, ""
+    return False, sb.get_current_url()
 
-# ==================== 调度逻辑 ====================
+
 def _next_trigger(expiry_utc):
     t = expiry_utc - timedelta(minutes=MINUTES_BEFORE_EXPIRY)
     if t.timestamp() <= time.time() + 60:
@@ -328,23 +428,30 @@ def _next_trigger(expiry_utc):
         print("⚠️ 计算出的触发时间已过，兜底改为 2 分钟后: " + fmt_beijing(t) + " (北京)")
     return t
 
+
 def _retry_trigger(minutes=RETRY_AFTER_MINUTES):
     return datetime.now(timezone.utc) + timedelta(minutes=minutes)
 
+
 def schedule_via_cronjob(trigger_timestamp, gh_token, repo, workflow_id, api_key, branch="main"):
     dt = datetime.fromtimestamp(trigger_timestamp, tz=timezone.utc)
+
+    # 关键修复：cron-job.org 里 -1 表示“任意/每天”，不是“不限制”。
+    # mdays/months 填 -1 会退化成 "28 21 * * *"，即每天同一时刻触发。
+    # 必须给具体 day / month，才能真正只在那一天触发。
+    # wdays 必须保持 -1：它与 mdays 是 OR 关系，填具体星期几会变成“每周也触发”。
     schedule = {
         "minutes": [dt.minute],
         "hours": [dt.hour],
-        # mdays/months/wdays 全 -1，避免 cron-job.org 的 OR 语义叠加成"每天触发"
-        "mdays": [-1],
-        "months": [-1],
+        "mdays": [dt.day],
+        "months": [dt.month],
         "wdays": [-1],
         "timezone": "UTC",
         "expiresAt": int((dt + timedelta(minutes=30)).timestamp()),
     }
+
     dispatch_url = ("https://api.github.com/repos/" + repo
-                    + "/actions/workflows/" + str(workflow_id) + "/dispatches")
+                    + "/actions/workflows/" + workflow_id + "/dispatches")
     payload = {"job": {
         "enabled": True,
         "url": dispatch_url,
@@ -364,6 +471,9 @@ def schedule_via_cronjob(trigger_timestamp, gh_token, repo, workflow_id, api_key
     }}
     headers = {"Authorization": "Bearer " + api_key, "Content-Type": "application/json"}
     print("📤 调度触发时间 (UTC): " + str(dt))
+    print("🧮 cron 表达式(UTC): "
+          + str(dt.minute) + " " + str(dt.hour) + " "
+          + str(dt.day) + " " + str(dt.month) + " *")
 
     try:
         resp = requests.get("https://api.cron-job.org/jobs", headers=headers, timeout=30)
@@ -371,12 +481,13 @@ def schedule_via_cronjob(trigger_timestamp, gh_token, repo, workflow_id, api_key
         jobs = resp.json().get("jobs", [])
         print("📋 现有任务数量: " + str(len(jobs)))
 
-        # 按前缀匹配：旧的“文件名 URL”任务也能命中，随后被 PATCH 成数字 ID 的 URL
+        # 按 URL 前缀宽松匹配，避免 workflow 文件名大小写 / 数字 ID 差异导致重复创建
         prefix = "https://api.github.com/repos/" + repo + "/actions/workflows/"
         matching = [j for j in jobs if (j.get("url") or "").startswith(prefix)]
+
+        # 保留 jobId 最大的一个，其余删除，避免任务堆积
         matching.sort(key=lambda x: x.get("jobId", 0), reverse=True)
 
-        # 清理多余任务，保留最新的一条
         for job in matching[1:]:
             jid = job.get("jobId")
             if jid:
@@ -405,6 +516,7 @@ def schedule_via_cronjob(trigger_timestamp, gh_token, repo, workflow_id, api_key
         print("❌ cron-job.org API 异常: " + str(e))
         return False
 
+
 def _try_schedule(trigger_dt_utc, reason=""):
     if not all([GH_TOKEN, GH_REPO, GH_WORKFLOW_ID, CRONJOB_API_KEY]):
         print("⚠️ 缺少调度变量，跳过调度")
@@ -416,20 +528,10 @@ def _try_schedule(trigger_dt_utc, reason=""):
     return schedule_via_cronjob(trigger_dt_utc.timestamp(), GH_TOKEN, GH_REPO,
                                 GH_WORKFLOW_ID, CRONJOB_API_KEY)
 
-# ==================== WARP 代理管理 ====================
-class WARPManager:
-    def rotate_ip(self, attempt_idx=0):
-        print("🔄 轮换 WARP IP...")
-        time.sleep(2)
 
-_warp_manager = WARPManager()
-def get_warp_manager():
-    return _warp_manager
-
-# ==================== 主流程 ====================
 def _main():
     print("🚀 启动浏览器")
-    print("🔗 使用代理: " + (PROXY_SERVER if PROXY_SERVER else "🍭 未使用代理，直连访问"))
+    print("🔗 使用代理: " + PROXY_SERVER if PROXY_SERVER else "🍭 未使用代理，直连访问")
     print("📍 当前出口 IP: " + get_current_ip(PROXY_SERVER or None))
 
     base_header = ("🌹 TheRose Cloud 自动续期\n👤 账号: " + EMAIL
@@ -452,6 +554,7 @@ def _main():
             msg = base_header + "\n\n❌ 登录失败，请检查账号密码、代理或网络\nhttps://therose.cloud/"
             print(msg)
             send_tg(TG_BOT_TOKEN, TG_CHAT_ID, msg)
+            # 失败也必须排下一次，否则 one-shot 过期后链条断掉
             _try_schedule(_retry_trigger(), "（登录失败，" + str(RETRY_AFTER_MINUTES) + " 分钟后重试）")
             return
 
@@ -487,6 +590,7 @@ def _main():
                     r'data-testid="([^"]*(?:countdown|renew|server|expiry|time)[^"]*)"',
                     html, re.I)
                 cls = re.findall(r'class="(trc-[^"]*)"', html)
+                # 先算好再拼接，避免 f-string 内出现反斜杠（Py3.10 限制）
                 print("🔎 页面相关 testid: " + str(sorted(set(ids))))
                 print("🔎 trc- class: " + str(sorted(set(cls))))
             except Exception as e2:
@@ -524,6 +628,7 @@ def _main():
             msg = base_header + "\n\n❌ 续期点击失败: " + click_msg + time_info
             print(msg)
             send_tg(TG_BOT_TOKEN, TG_CHAT_ID, msg)
+            # 无条件调度重试，不依赖 FORCE_SCHEDULE
             _try_schedule(_retry_trigger(), "（点击失败，" + str(RETRY_AFTER_MINUTES) + " 分钟后重试）")
             return
 
@@ -543,12 +648,14 @@ def _main():
             msg = base_header + "\n\n⚠️ 续期可能失败: " + vmsg + time_info
             print(msg)
             send_tg(TG_BOT_TOKEN, TG_CHAT_ID, msg)
+            # 验证失败也无条件重试；new_expiry 有效则按到期时间排，否则 5 分钟后
             if new_expiry:
                 _try_schedule(_next_trigger(new_expiry), "（验证失败，按新到期时间）")
             else:
                 _try_schedule(_retry_trigger(), "（验证失败，" + str(RETRY_AFTER_MINUTES) + " 分钟后重试）")
 
     print("🏁 脚本执行完毕")
+
 
 def main():
     try:
@@ -559,11 +666,13 @@ def main():
         send_tg(TG_BOT_TOKEN, TG_CHAT_ID,
                 "💥 脚本异常退出\n" + EMAIL + "\n" + type(e).__name__ + ": "
                 + str(e) + "\n" + tb[-1500:])
+        # 顶层异常也补一次重试调度，防止链条断裂
         try:
             _try_schedule(_retry_trigger(), "（异常退出，" + str(RETRY_AFTER_MINUTES) + " 分钟后重试）")
         except Exception:
             pass
         raise
+
 
 if __name__ == "__main__":
     main()
